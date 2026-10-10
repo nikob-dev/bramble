@@ -1,0 +1,13 @@
+[package]
+name = "bramble"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bramble-core.workspace = true
+bramble-ledger.workspace = true
+
+[lints]
+workspace = true
