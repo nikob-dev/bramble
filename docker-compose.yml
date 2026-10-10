@@ -1,0 +1,31 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/app/target
+    profiles: ["dev"]
+
+  pet-a:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: bramble:dev
+    environment:
+      BRAMBLE_PET_NAME: pip
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - pet-a-data:/var/lib/bramble
+
+volumes:
+  cargo-registry:
+  cargo-target:
+  pet-a-data:
