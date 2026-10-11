@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 pub use bramble_core::money::format_minor;
 
+pub mod rails;
+
 const SCHEMA: &str = include_str!("schema.sql");
 
 pub type EntryId = i64;

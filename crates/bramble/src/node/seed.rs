@@ -1,6 +1,7 @@
-//! Demo data for a brand-new pet-bank: one customer (you) with a month of activity.
+//! Demo data for a brand-new pet-bank: one customer (you) with a month of activity,
+//! plus the bank's opening reserves at the operator (decision 012).
 
-use bramble_ledger::{AccountKind, Ledger, NewEntry, Posting};
+use bramble_ledger::{AccountKind, Ledger, NewEntry, Posting, rails};
 
 const ACCOUNTS: &[(&str, AccountKind)] = &[
     ("reserves", AccountKind::Asset),
@@ -57,6 +58,7 @@ pub fn seed(ledger: &mut Ledger) -> anyhow::Result<()> {
             ],
         })?;
     }
+    rails::open_bank(ledger)?;
     Ok(())
 }
 
@@ -69,7 +71,11 @@ mod tests {
         let mut ledger = Ledger::open_in_memory().expect("ledger");
         seed(&mut ledger).expect("seed");
         seed(&mut ledger).expect("reseed");
-        assert_eq!(ledger.entry_count().expect("count"), 4);
+        assert_eq!(
+            ledger.entry_count().expect("count"),
+            5,
+            "4 demo entries + opening reserves"
+        );
         assert_eq!(ledger.balance("customer:you").expect("balance"), -7_150);
         let total: i64 = ledger
             .accounts()
