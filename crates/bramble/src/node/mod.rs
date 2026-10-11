@@ -2,6 +2,7 @@
 
 mod api;
 mod identity;
+mod net;
 mod published;
 mod seed;
 mod server;
@@ -49,6 +50,12 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     let store = PetStore::open(config.pet_store_path())?;
     let key = identity::load_or_create(&store)?;
+    // Its own connection to pet.db: peer pins are written from network tasks.
+    let net = Arc::new(net::Net::new(
+        &config.node_id,
+        key.clone(),
+        PetStore::open(config.pet_store_path())?,
+    )?);
     let published = Published::build(&lessons, &key, identity::public_key_pem(&key)?);
     let world = World::load(
         WorldParts {
@@ -70,7 +77,12 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         tokio::spawn(tick_loop(shared.clone()));
-        server::serve(&config.bind, shared, &config.web_dir).await
+        tokio::spawn(net::discover_peers(net.clone(), config.peers.clone()));
+        tokio::try_join!(
+            server::serve(&config.bind, shared, &config.web_dir),
+            net::serve(&config.net_bind, net),
+        )?;
+        Ok(())
     })
 }
 
