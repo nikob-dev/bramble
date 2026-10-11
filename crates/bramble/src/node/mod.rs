@@ -69,6 +69,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     let world = World::load(
         WorldParts {
             pet_name: config.pet_name.clone(),
+            node_id: config.node_id.clone(),
             curriculum,
             lessons,
             ledger,

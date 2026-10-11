@@ -28,6 +28,7 @@ pub fn world_with(store: PetStore, ledger: Ledger) -> World {
     World::load(
         WorldParts {
             pet_name: "pip".into(),
+            node_id: "pet-a".into(),
             curriculum,
             lessons,
             ledger,

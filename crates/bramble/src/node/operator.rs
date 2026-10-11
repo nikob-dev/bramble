@@ -9,18 +9,21 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::Router;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::Json;
+use axum::response::{IntoResponse, Json};
 use axum::routing::{get, post};
 use bramble_core::net::{NetMsg, Rail as RailKind};
+use bramble_core::protocol::{EntryView, OperatorBankView, OperatorView, ServerMsg};
 use bramble_ledger::nacha::{self, AchFile, Batch};
 use bramble_ledger::rails::{
     Rail, Rtp, Transfer, ach_positions, open_operator, operator_account, operator_ach_settlement,
 };
 use bramble_ledger::{AccountBalance, Ledger, NewEntry, PostOutcome};
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
 use super::ach_bank::file_id;
 use super::net::{Inbound, Net};
@@ -30,6 +33,7 @@ use super::{identity, net, now_unix};
 use crate::config::Config;
 
 const WINDOW_KEY_PREFIX: &str = "ach:window:";
+const RECENT_SETTLEMENTS: usize = 10;
 
 enum Work {
     Rtp(Inbound),
@@ -44,11 +48,14 @@ pub struct Operator {
     files: Waiters<String>,
     work: mpsc::UnboundedSender<Work>,
     queue: std::sync::Mutex<Option<mpsc::UnboundedReceiver<Work>>>,
+    /// Snapshots for dashboards watching over `/ws`.
+    pub updates: broadcast::Sender<ServerMsg>,
 }
 
 impl Operator {
     pub fn new(ledger: Ledger, net: Arc<Net>, banks: Vec<String>) -> Arc<Self> {
         let (work, queue) = mpsc::unbounded_channel();
+        let (updates, _) = broadcast::channel(64);
         Arc::new(Self {
             ledger: Mutex::new(ledger),
             net,
@@ -57,7 +64,43 @@ impl Operator {
             files: Waiters::default(),
             work,
             queue: std::sync::Mutex::new(Some(queue)),
+            updates,
         })
+    }
+
+    /// What the operator's dashboard shows right now.
+    pub async fn snapshot(&self) -> ServerMsg {
+        let ledger = self.ledger.lock().await;
+        let read = || -> bramble_ledger::Result<OperatorView> {
+            let mut banks = Vec::new();
+            for bank in &self.banks {
+                banks.push(OperatorBankView {
+                    bank: bank.clone(),
+                    balance_minor: statement_for(&ledger, bank)?.balance_minor,
+                });
+            }
+            Ok(OperatorView {
+                banks,
+                ach_windows_settled: ledger.count_entries_with_key_prefix(WINDOW_KEY_PREFIX)?,
+                recent_settlements: ledger
+                    .recent_entries(RECENT_SETTLEMENTS)?
+                    .into_iter()
+                    .map(EntryView::from)
+                    .collect(),
+            })
+        };
+        let operator = read()
+            .inspect_err(|error| tracing::error!(%error, "reading operator books for snapshot"))
+            .unwrap_or_default();
+        ServerMsg::Operator {
+            v: bramble_core::PROTOCOL_VERSION,
+            operator,
+        }
+    }
+
+    /// Pushes a fresh snapshot to every watching dashboard (none watching is fine).
+    async fn publish(&self) {
+        let _ = self.updates.send(self.snapshot().await);
     }
 
     /// Closes the current ACH window: collects every bank's file, nets, and settles.
@@ -111,8 +154,9 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         }
         let listener = tokio::net::TcpListener::bind(&config.bind).await?;
         tracing::info!(bind = %config.bind, "operator listening");
+        let app = router(operator, &config.web_dir);
         tokio::try_join!(
-            async { Ok::<_, anyhow::Error>(axum::serve(listener, router(operator)).await?) },
+            async { Ok::<_, anyhow::Error>(axum::serve(listener, app).await?) },
             net::serve(&config.net_bind, net),
         )?;
         Ok(())
@@ -136,13 +180,48 @@ async fn cutoff_timer(operator: Arc<Operator>, every: Duration) {
     }
 }
 
-fn router(operator: Arc<Operator>) -> Router {
-    Router::new()
+fn router(operator: Arc<Operator>, web_dir: &std::path::Path) -> Router {
+    let api = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/books", get(books))
         .route("/api/ach/cutoff", post(cutoff))
         .route("/api/statements/{bank}", get(statement))
-        .with_state(operator)
+        .route("/ws", get(ws))
+        .with_state(operator);
+    super::server::with_web_app(api, web_dir)
+}
+
+/// Dashboards watch the operator over the same WebSocket protocol as a bank's; the
+/// operator only ever sends.
+async fn ws(upgrade: WebSocketUpgrade, State(operator): State<Arc<Operator>>) -> impl IntoResponse {
+    upgrade.on_upgrade(move |socket| watch(socket, operator))
+}
+
+async fn watch(socket: WebSocket, operator: Arc<Operator>) {
+    let (mut sink, mut stream) = socket.split();
+    let mut updates = operator.updates.subscribe();
+    let mut next = Some(operator.snapshot().await);
+    loop {
+        if let Some(msg) = next.take() {
+            let Ok(json) = serde_json::to_string(&msg) else {
+                return;
+            };
+            if sink.send(Message::Text(json.into())).await.is_err() {
+                return;
+            }
+        }
+        tokio::select! {
+            update = updates.recv() => match update {
+                Ok(msg) => next = Some(msg),
+                Err(broadcast::error::RecvError::Lagged(_)) => next = Some(operator.snapshot().await),
+                Err(broadcast::error::RecvError::Closed) => return,
+            },
+            incoming = stream.next() => match incoming {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
 }
 
 async fn books(State(operator): State<Arc<Operator>>) -> Json<Vec<AccountBalance>> {
@@ -358,6 +437,7 @@ async fn run_cutoff(operator: &Operator) -> Result<CutoffReport, String> {
             .map_err(|e| format!("settlement could not be booked: {e}"))?;
     }
     tracing::info!(window, payments, "ACH window settled");
+    operator.publish().await;
 
     // 3. Tell every bank: its incoming entries, then its settlement.
     for bank in positions.keys() {
@@ -448,6 +528,9 @@ async fn settle_rtp(operator: &Operator, Inbound { from, msg }: Inbound) {
     };
     let status = decide(operator, &from, &msg_id, &transfer, &memo).await;
     tracing::info!(%msg_id, accepted = status.accepted, reason = ?status.reason, "rtp decided");
+    if status.accepted {
+        operator.publish().await;
+    }
     let reply = status_msg(&msg_id, &status);
     if status.accepted {
         // The receiving bank books its side on this confirmation.
@@ -592,5 +675,49 @@ mod tests {
             statement_for(&ledger, "pet-z").is_err(),
             "non-members have no account"
         );
+    }
+
+    #[tokio::test]
+    async fn operator_dashboard_sees_every_bank_and_updates_after_a_cutoff() {
+        let (banks, op) = crate::node::test_support::network(2).await;
+        let ServerMsg::Operator {
+            operator: before, ..
+        } = op.snapshot().await
+        else {
+            panic!("operator snapshot");
+        };
+        assert_eq!(before.banks.len(), 2);
+        assert_eq!(before.ach_windows_settled, 0);
+
+        let mut watching = op.updates.subscribe();
+        let request = crate::node::rtp::PaymentRequest {
+            from_account: "customer:you".into(),
+            to_bank: "pet-b".into(),
+            to_account: "customer:alex".into(),
+            amount_minor: 900,
+            memo: "test".into(),
+            receiver_name: None,
+        };
+        crate::node::ach_bank::originate(&banks[0], request, Some("dash".into()))
+            .await
+            .expect("queue");
+        op.cutoff().await.expect("cutoff");
+        let update = tokio::time::timeout(std::time::Duration::from_secs(1), watching.recv())
+            .await
+            .expect("a dashboard update within a second")
+            .expect("update");
+        let ServerMsg::Operator {
+            operator: after, ..
+        } = update
+        else {
+            panic!("operator snapshot");
+        };
+        assert_eq!(after.ach_windows_settled, 1);
+        let a = after
+            .banks
+            .iter()
+            .find(|b| b.bank == "pet-a")
+            .expect("pet-a");
+        assert_eq!(a.balance_minor, OPENING_RESERVES - 900);
     }
 }

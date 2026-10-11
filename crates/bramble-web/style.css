@@ -111,6 +111,8 @@ code { font: 13px var(--mono); }
 .fill.energy { background: var(--energy); }
 .fill.curiosity { background: var(--curiosity); }
 .meter-value { font: 12px var(--mono); color: var(--muted); width: 2.5em; text-align: right; }
+.small { font-size: 13px; }
+.network .stats dd { justify-content: flex-end; }
 .speech { margin: 12px 0 0; font-style: italic; min-height: 1.5em; }
 
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }

@@ -131,6 +131,23 @@ pub struct EntryRow {
     pub postings: Vec<Posting>,
 }
 
+impl From<EntryRow> for bramble_core::protocol::EntryView {
+    fn from(row: EntryRow) -> Self {
+        Self {
+            entry_id: row.entry_id,
+            memo: row.memo,
+            postings: row
+                .postings
+                .into_iter()
+                .map(|p| bramble_core::lesson::PostingSpec {
+                    account: p.account,
+                    amount_minor: p.amount_minor,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// What an ACH origination queues for the next file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxItem {

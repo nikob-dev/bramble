@@ -6,7 +6,8 @@ mod socket;
 use bramble_core::money::format_minor;
 use bramble_core::pet::{Mood, art};
 use bramble_core::protocol::{
-    ActivityView, ConceptStatus, ConceptView, LedgerView, LessonView, PetView, ServerMsg, StepKind,
+    ActivityView, ConceptStatus, ConceptView, EntryView, LedgerView, LessonView, NetworkView,
+    OperatorView, PetView, ServerMsg, StepKind,
 };
 use bramble_core::teacher::ActivityKind;
 use leptos::prelude::*;
@@ -26,6 +27,14 @@ struct Snapshot {
     mastery: Vec<ConceptView>,
     activity: Option<ActivityView>,
     ledger: LedgerView,
+    network: Option<NetworkView>,
+}
+
+/// A page shows either a bank (pet, lesson, books) or the operator (every bank's account).
+#[derive(Clone, PartialEq)]
+enum Page {
+    Bank(Box<Snapshot>),
+    Operator(OperatorView),
 }
 
 #[component]
@@ -34,23 +43,26 @@ fn App() -> impl IntoView {
     let (status, set_status) = signal(Status::Connecting);
     socket::connect(set_message, set_status);
 
-    let snapshot = Memo::new(move |_| {
-        message.get().map(
-            |ServerMsg::State {
-                 pet,
-                 lesson,
-                 mastery,
-                 activity,
-                 ledger,
-                 ..
-             }| Snapshot {
+    let page = Memo::new(move |_| {
+        message.get().map(|msg| match msg {
+            ServerMsg::State {
+                pet,
+                lesson,
+                mastery,
+                activity,
+                ledger,
+                network,
+                ..
+            } => Page::Bank(Box::new(Snapshot {
                 pet,
                 lesson,
                 mastery,
                 activity,
                 ledger: ledger.unwrap_or_default(),
-            },
-        )
+                network,
+            })),
+            ServerMsg::Operator { operator, .. } => Page::Operator(operator),
+        })
     });
     // The pet keeps talking about the last thing it said until it says something new.
     let (speech, set_speech) = signal(None::<String>);
@@ -67,23 +79,38 @@ fn App() -> impl IntoView {
             <StatusBadge status />
         </header>
         <Show
-            when=move || snapshot.get().is_some()
+            when=move || page.get().is_some()
             fallback=|| view! { <p class="waiting">"Waking up your pet…"</p> }
         >
-            {move || snapshot.get().map(|s| view! {
-                <main class="grid">
-                    <div class="col">
-                        <PetCard pet=s.pet speech />
-                        <LedgerPanel ledger=s.ledger />
-                    </div>
-                    <div class="col">
-                        <LessonCard lesson=s.lesson activity=s.activity />
-                        <MasteryMap mastery=s.mastery />
-                    </div>
-                </main>
+            {move || page.get().map(|page| match page {
+                Page::Bank(s) => {
+                    let s = *s;
+                    view! {
+                        <main class="grid">
+                            <div class="col">
+                                <PetCard pet=s.pet speech />
+                                {s.network.map(|network| view! { <NetworkCard network /> })}
+                                <LedgerPanel ledger=s.ledger />
+                            </div>
+                            <div class="col">
+                                <LessonCard lesson=s.lesson activity=s.activity />
+                                <MasteryMap mastery=s.mastery />
+                            </div>
+                        </main>
+                    }
+                    .into_any()
+                }
+                Page::Operator(operator) => view! { <OperatorPage operator /> }.into_any(),
             })}
         </Show>
-        <footer>"The lab lives in your terminal: " <code>"make play"</code></footer>
+        <footer>
+            {move || match page.get() {
+                Some(Page::Operator(_)) => view! {
+                    "Ring the ACH bell from a bank's lab: " <code>"bramble ach cutoff"</code>
+                }.into_any(),
+                _ => view! { "The lab lives in your terminal: " <code>"make play"</code> }.into_any(),
+            }}
+        </footer>
     }
 }
 
@@ -300,23 +327,97 @@ fn LedgerPanel(ledger: LedgerView) -> impl IntoView {
                 </tr></tfoot>
             </table>
             <h3>"Recent entries"</h3>
-            <ol class="entries">
-                {ledger.recent_entries.into_iter().map(|e| view! {
-                    <li>
-                        <span class="entry-id">"#" {e.entry_id}</span>
-                        <span class="entry-memo">{e.memo}</span>
-                        <ul class="postings">
-                            {e.postings.into_iter().map(|p| view! {
-                                <li>
-                                    <code>{p.account}</code>
-                                    <span class=amount_class(p.amount_minor)>{format_minor(p.amount_minor)}</span>
-                                </li>
-                            }).collect_view()}
-                        </ul>
-                    </li>
-                }).collect_view()}
-            </ol>
+            <EntryList entries=ledger.recent_entries />
         </section>
+    }
+}
+
+#[component]
+fn EntryList(entries: Vec<EntryView>) -> impl IntoView {
+    view! {
+        <ol class="entries">
+            {entries.into_iter().map(|e| view! {
+                <li>
+                    <span class="entry-id">"#" {e.entry_id}</span>
+                    <span class="entry-memo">{e.memo}</span>
+                    <ul class="postings">
+                        {e.postings.into_iter().map(|p| view! {
+                            <li>
+                                <code>{p.account}</code>
+                                <span class=amount_class(p.amount_minor)>{format_minor(p.amount_minor)}</span>
+                            </li>
+                        }).collect_view()}
+                    </ul>
+                </li>
+            }).collect_view()}
+        </ol>
+    }
+}
+
+/// This bank's place in the payment network: money at the operator, ACH waiting.
+#[component]
+fn NetworkCard(network: NetworkView) -> impl IntoView {
+    view! {
+        <section class="card network">
+            <h2>"On the network " <span class="muted">"as " <code>{network.node_id}</code></span></h2>
+            <dl class="stats">
+                <dt>"at the operator"</dt>
+                <dd class="num">{format_minor(network.reserves_minor)}</dd>
+                <dt>"ACH queued"</dt>
+                <dd class="num">
+                    {if network.ach_queued == 0 {
+                        "nothing waiting".to_owned()
+                    } else {
+                        format!("{} · {}", network.ach_queued, format_minor(network.ach_queued_minor))
+                    }}
+                </dd>
+            </dl>
+            <p class="muted small">
+                "Instant (RTP) payments move reserves at once. ACH waits for "
+                <code>"bramble ach cutoff"</code> ", then settles net."
+            </p>
+        </section>
+    }
+}
+
+/// The clearing house: every bank's account, and what it settled recently.
+#[component]
+fn OperatorPage(operator: OperatorView) -> impl IntoView {
+    let total: i64 = operator.banks.iter().map(|b| b.balance_minor).sum();
+    view! {
+        <main class="grid">
+            <div class="col">
+                <section class="card">
+                    <h2>"The operator " <span class="muted">"settles between banks"</span></h2>
+                    <table>
+                        <thead><tr><th>"bank"</th><th class="num">"balance here"</th></tr></thead>
+                        <tbody>
+                            {operator.banks.into_iter().map(|b| view! {
+                                <tr>
+                                    <td><code>{b.bank}</code></td>
+                                    <td class="num">{format_minor(b.balance_minor)}</td>
+                                </tr>
+                            }).collect_view()}
+                        </tbody>
+                        <tfoot><tr>
+                            <td>"held for all banks"</td>
+                            <td class="num">{format_minor(total)}</td>
+                        </tr></tfoot>
+                    </table>
+                    <p class="muted small">
+                        "Each bank should show the same number as " <code>"reserves:operator"</code>
+                        " in its own books. " <code>"bramble reconcile"</code> " checks."
+                    </p>
+                    <p>"ACH windows settled: " <strong>{operator.ach_windows_settled}</strong></p>
+                </section>
+            </div>
+            <div class="col">
+                <section class="card ledger">
+                    <h2>"Recent settlements"</h2>
+                    <EntryList entries=operator.recent_settlements />
+                </section>
+            </div>
+        </main>
     }
 }
 

@@ -35,6 +35,12 @@ pub fn router(shared: Arc<Shared>, web_dir: &Path) -> Router {
         .route("/api/keys/node.pem", get(api::public_key))
         .route("/ws", get(ws))
         .with_state(shared);
+    with_web_app(api, web_dir)
+}
+
+/// Serves the browser app from `web_dir` for any path the API doesn't claim, when it has
+/// been built (`web_dir/index.html`). Shared by banks and the operator.
+pub fn with_web_app(api: Router, web_dir: &Path) -> Router {
     let index = web_dir.join("index.html");
     if index.exists() {
         api.fallback_service(ServeDir::new(web_dir).fallback(ServeFile::new(index)))
@@ -179,7 +185,9 @@ mod tests {
     }
 
     fn step_index(msg: &ServerMsg) -> usize {
-        let ServerMsg::State { lesson, .. } = msg;
+        let ServerMsg::State { lesson, .. } = msg else {
+            panic!("a bank sends state messages");
+        };
         lesson.as_ref().expect("lesson").step_index
     }
 
@@ -240,7 +248,9 @@ mod tests {
         .await;
         assert!(response.starts_with("HTTP/1.1 201"), "{response}");
 
-        let ServerMsg::State { ledger, .. } = next_state(&mut browser).await;
+        let ServerMsg::State { ledger, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
         let ledger = ledger.expect("ledger view");
         assert_eq!(ledger.recent_entries[0].memo, "Pay Alex");
         let alex = ledger
@@ -284,6 +294,31 @@ mod tests {
             ("alex", 1_300)
         );
         assert_eq!(entry.individual_name, "ALEX KIM");
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_updates_every_clients_network_view_within_a_second() {
+        let addr = start(Path::new("/nonexistent")).await;
+        let mut browser = connect(addr).await;
+        let ServerMsg::State { network, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
+        let network = network.expect("network view");
+        assert_eq!((network.node_id.as_str(), network.ach_queued), ("pet-a", 0));
+        assert_eq!(
+            network.reserves_minor,
+            bramble_ledger::rails::OPENING_RESERVES
+        );
+
+        let body = r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":1300}"#;
+        let response = http(addr, &post_json("/api/ach/payments", "sync-1", body)).await;
+        assert!(response.starts_with("HTTP/1.1 201"), "{response}");
+
+        let ServerMsg::State { network, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
+        let network = network.expect("network view");
+        assert_eq!((network.ach_queued, network.ach_queued_minor), (1, 1_300));
     }
 
     #[tokio::test]

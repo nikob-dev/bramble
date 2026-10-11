@@ -11,6 +11,10 @@ use crate::teacher::{ActivityKind, ActivityPlan};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a wire message: serialized once and dropped, never stored in bulk"
+)]
 pub enum ServerMsg {
     State {
         v: u16,
@@ -23,7 +27,38 @@ pub enum ServerMsg {
         activity: Option<ActivityView>,
         #[serde(default)]
         ledger: Option<LedgerView>,
+        /// This bank's place in the payment network (M4). Absent from older nodes.
+        #[serde(default)]
+        network: Option<NetworkView>,
     },
+    /// What the operator's dashboard shows: every bank's account and recent settlements.
+    Operator { v: u16, operator: OperatorView },
+}
+
+/// A bank's position in the network, for its dashboard and the TUI.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkView {
+    pub node_id: String,
+    /// Our money held at the operator (`reserves:operator`).
+    pub reserves_minor: i64,
+    /// ACH payments queued for the next cutoff.
+    pub ach_queued: usize,
+    pub ach_queued_minor: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorView {
+    /// Each member bank's balance at the operator, from the bank's side.
+    pub banks: Vec<OperatorBankView>,
+    pub ach_windows_settled: i64,
+    /// Newest first.
+    pub recent_settlements: Vec<EntryView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorBankView {
+    pub bank: String,
+    pub balance_minor: i64,
 }
 
 /// The pet-bank's books, for clients that display them (the TUI ignores this).
@@ -224,6 +259,36 @@ mod tests {
         assert!(json.contains(r#""type":"observe""#));
         assert_eq!(
             serde_json::from_str::<ClientMsg>(&json).expect("parse"),
+            msg
+        );
+    }
+
+    #[test]
+    fn protocol_state_without_network_still_parses() {
+        let older = r#"{"type":"state","v":1,"pet":{"name":"pip","mood":"curious","energy":80,"curiosity":40,"level":1,"xp":0},"lesson":null,"say":null}"#;
+        let ServerMsg::State { network, .. } = serde_json::from_str(older).expect("parse") else {
+            panic!("a state message");
+        };
+        assert_eq!(network, None);
+    }
+
+    #[test]
+    fn protocol_operator_message_round_trips() {
+        let msg = ServerMsg::Operator {
+            v: crate::PROTOCOL_VERSION,
+            operator: OperatorView {
+                banks: vec![OperatorBankView {
+                    bank: "pet-a".into(),
+                    balance_minor: 1_000_000,
+                }],
+                ach_windows_settled: 2,
+                recent_settlements: Vec::new(),
+            },
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains(r#""type":"operator""#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<ServerMsg>(&json).expect("parse"),
             msg
         );
     }
