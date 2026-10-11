@@ -1,0 +1,30 @@
+# Same Docker-only contract as local development: CI runs the Makefile targets.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint (rustfmt + clippy -D warnings)
+        run: make lint
+      - name: Unit and integration tests
+        run: make test
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Play the lessons through the real TUI
+        run: make e2e
