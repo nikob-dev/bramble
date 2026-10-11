@@ -1,0 +1,172 @@
+id = "hashing-signatures"
+title = "Hashing & signatures"
+concept = "hashing-signatures"
+
+[[sources]]
+title = "NIST FIPS 180-4: Secure Hash Standard (SHA-256)"
+url = "https://csrc.nist.gov/pubs/fips/180-4/upd1/final"
+
+[[sources]]
+title = "RFC 8032: Edwards-Curve Digital Signature Algorithm (Ed25519)"
+url = "https://www.rfc-editor.org/rfc/rfc8032"
+
+[[sources]]
+title = "Nacha Operating Rules (ACH payment files)"
+url = "https://www.nacha.org/rules"
+
+[[setup.files]]
+name = "batch-001.csv"
+sign = true
+content = """
+batch_id,payment_id,payee,amount_minor
+BATCH-001,P-1,Alex,2500
+BATCH-001,P-2,Grocer,1875
+BATCH-001,P-3,Landlord,120000
+"""
+
+[[steps]]
+kind = "explain"
+text = """
+Banks don't only send payments one at a time. They exchange FILES: thousands of
+payments in one batch (ACH files in the US, ISO 20022 XML almost everywhere else).
+
+Before acting on a payment file, the receiving bank must answer two questions:
+  1. Was the file changed on the way?  (integrity)
+  2. Did it really come from who it claims to?  (authenticity)
+
+A hash answers the first. A digital signature answers both.
+"""
+
+[[steps]]
+kind = "task"
+id = "download-batch"
+prompt = '''
+Download the payment batch my bank just produced:
+
+  curl -s localhost:8080/api/files/batch-001.csv -o batch-001.csv
+'''
+hint = "Run the curl command exactly as shown. `cat batch-001.csv` to look inside."
+check = { type = "command_ran", pattern = '^curl\b.*files/batch-001\.csv' }
+
+[[steps]]
+kind = "task"
+id = "hash-batch"
+prompt = '''
+A SHA-256 hash is a 64-hex-character fingerprint of a file. Change one byte and the
+whole fingerprint changes. I published the batch's fingerprint at:
+
+  localhost:8080/api/files/batch-001.csv.sha256
+
+Compute the hash of YOUR copy and check that it matches.
+'''
+hint = "sha256sum batch-001.csv, and compare with the output of curl -s localhost:8080/api/files/batch-001.csv.sha256"
+success = "Fingerprints match: your copy is byte-for-byte what I published."
+check = { type = "output_contains_fact", fact = "sha256:batch-001.csv", command = '^(sha256sum|openssl\s+dgst)\b' }
+
+[[steps]]
+kind = "explain"
+text = """
+But here's the catch: an attacker who can swap the file can probably swap the
+published hash too. A hash proves the file wasn't changed relative to SOME fingerprint,
+not who made it.
+
+A SIGNATURE fixes that. I signed the batch with my private Ed25519 key, which never
+leaves my bank. Anyone holding my PUBLIC key can check the signature, and nobody
+without my private key can produce one.
+"""
+
+[[steps]]
+kind = "task"
+id = "get-signature-and-key"
+scaffold = true
+prompt = '''
+Download the signature and my public key:
+
+  curl -s localhost:8080/api/files/batch-001.csv.sig -o batch-001.csv.sig
+  curl -s localhost:8080/api/keys/node.pem -o node.pem
+'''
+hint = "Run both curl commands as shown. `cat node.pem` shows the public key."
+check = { type = "command_ran", pattern = '^curl\b.*keys/node\.pem' }
+
+[[steps]]
+kind = "task"
+id = "verify-signature"
+prompt = '''
+Verify the signature with OpenSSL:
+
+  openssl pkeyutl -verify -pubin -inkey node.pem -rawin -in batch-001.csv -sigfile batch-001.csv.sig
+
+(Missing the .sig or node.pem? curl -s localhost:8080/api/files/batch-001.csv.sig -o batch-001.csv.sig
+ and curl -s localhost:8080/api/keys/node.pem -o node.pem)
+'''
+hint = "Run the openssl command exactly as shown, from the folder with the three files (~/lab)."
+success = "\"Signature Verified Successfully\": unchanged AND from me."
+check = { type = "output_matches", pattern = 'Signature Verified Successfully', command = '^openssl\b' }
+
+[[steps]]
+kind = "task"
+id = "tamper"
+expect = "failure"
+prompt = '''
+Now be the attacker: change Alex's payment from 2500 to 9500 in your copy, then
+verify the signature again.
+
+  sed -i 's/2500/9500/' batch-001.csv
+'''
+hint = "After the sed, press ↑ to find the openssl verify command and run it again."
+success = "Verification FAILED. One digit changed and the signature no longer matches. Tampering caught."
+check = { type = "output_matches", pattern = 'Signature Verification Failure', command = '^openssl\b' }
+
+[[steps]]
+kind = "task"
+id = "hash-vs-signature"
+prompt = """
+Quiz: what's the difference?
+
+  a) A hash proves who sent a file. A signature proves it wasn't changed.
+  b) A hash detects changes. A signature detects changes AND proves who signed it.
+  c) They're the same thing with different names.
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Who can make a valid hash? Who can make a valid signature?"
+success = "Right. Anyone can compute a hash. Only the private-key holder can sign."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • SHA-256 fingerprints detect any change to a file.
+  • Ed25519 signatures prove integrity AND origin, as long as you trust the public key.
+  • Real payment networks pair this with transport security (TLS, SFTP) and publish
+    keys out-of-band. How you get someone's public key is its own trust problem.
+
+That's the whole Ledgers track! Next, my bank will join a network of other pet-banks.
+"""
+
+[[review]]
+id = "avalanche"
+prompt = """
+You change one character in a 10 MB payment file. Its SHA-256 hash...
+
+  a) changes slightly
+  b) changes completely
+  c) stays the same
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }
+
+[[review]]
+id = "who-can-sign"
+prompt = """
+Who can create a valid signature for my bank's payment files?
+
+  a) Anyone with my public key
+  b) Only whoever holds my private key
+  c) Anyone who can compute SHA-256
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

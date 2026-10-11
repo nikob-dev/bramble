@@ -2,9 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::curriculum::Curriculum;
 use crate::lesson::{Lesson, Source, Step};
+use crate::mastery::{MASTERY_THRESHOLD, MasteryMap};
 use crate::pet::{Mood, Pet};
 use crate::session::{LessonProgress, Observation};
+use crate::teacher::{ActivityKind, ActivityPlan};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -14,7 +17,75 @@ pub enum ServerMsg {
         pet: PetView,
         lesson: Option<LessonView>,
         say: Option<String>,
+        #[serde(default)]
+        mastery: Vec<ConceptView>,
+        #[serde(default)]
+        activity: Option<ActivityView>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivityView {
+    pub kind: ActivityKind,
+    pub reason: String,
+}
+
+impl From<&ActivityPlan> for ActivityView {
+    fn from(plan: &ActivityPlan) -> Self {
+        Self {
+            kind: plan.kind,
+            reason: plan.reason.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConceptView {
+    pub id: String,
+    pub title: String,
+    pub p_known: f32,
+    pub status: ConceptStatus,
+    pub review_due: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConceptStatus {
+    /// Prerequisites not mastered yet.
+    Locked,
+    /// Unlocked, not studied yet.
+    Ready,
+    Learning,
+    Mastered,
+}
+
+impl ConceptView {
+    /// One view per concept, in curriculum (prerequisite-first) order.
+    pub fn build_all(curriculum: &Curriculum, mastery: &MasteryMap, now_unix: i64) -> Vec<Self> {
+        curriculum
+            .concepts()
+            .iter()
+            .map(|concept| {
+                let p_known = mastery.p_known(&concept.id);
+                let status = if p_known >= MASTERY_THRESHOLD {
+                    ConceptStatus::Mastered
+                } else if !concept.prereqs.iter().all(|p| mastery.is_mastered(p)) {
+                    ConceptStatus::Locked
+                } else if mastery.is_studied(&concept.id) {
+                    ConceptStatus::Learning
+                } else {
+                    ConceptStatus::Ready
+                };
+                Self {
+                    id: concept.id.clone(),
+                    title: concept.title.clone(),
+                    p_known: p_known as f32,
+                    status,
+                    review_due: mastery.review_due(&concept.id, now_unix),
+                }
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,11 +121,15 @@ impl From<&Pet> for PetView {
 pub struct LessonView {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub step_id: Option<String>,
     pub step_index: usize,
     pub step_count: usize,
     pub kind: StepKind,
     pub text: String,
     pub hint: Option<String>,
+    #[serde(default)]
+    pub worked_example: Option<String>,
     pub completed: bool,
     pub sources: Vec<Source>,
 }
@@ -68,27 +143,35 @@ pub enum StepKind {
 
 impl LessonView {
     pub fn build(lesson: &Lesson, progress: &LessonProgress) -> Self {
-        let (kind, text, hint) = match lesson.steps.get(progress.step) {
-            Some(Step::Explain { text }) => (StepKind::Explain, text.clone(), None),
-            Some(Step::Task { prompt, hint, .. }) => (
+        let (kind, step_id, text, hint, worked_example) = match lesson.steps.get(progress.step) {
+            Some(Step::Explain { text }) => (StepKind::Explain, None, text.clone(), None, None),
+            Some(Step::Task(task)) => (
                 StepKind::Task,
-                prompt.clone(),
-                hint.clone().filter(|_| progress.hint_revealed),
+                Some(task.id.clone()),
+                task.prompt.clone(),
+                task.hint.clone().filter(|_| progress.hint_revealed),
+                task.worked_example
+                    .clone()
+                    .filter(|_| progress.worked_example_revealed),
             ),
             None => (
                 StepKind::Explain,
-                "Lesson complete! More of the Ledgers track arrives in the next update.".to_owned(),
+                None,
+                "Done! Run `bramble next` and I'll pick what we learn next.".to_owned(),
+                None,
                 None,
             ),
         };
         Self {
             id: lesson.id.clone(),
             title: lesson.title.clone(),
+            step_id,
             step_index: progress.step.min(lesson.steps.len()),
             step_count: lesson.steps.len(),
             kind,
             text,
             hint,
+            worked_example,
             completed: progress.completed,
             sources: lesson.sources.clone(),
         }

@@ -5,6 +5,7 @@ use bramble_ledger::{AccountKind, Ledger, NewEntry, Posting};
 const ACCOUNTS: &[(&str, AccountKind)] = &[
     ("reserves", AccountKind::Asset),
     ("customer:you", AccountKind::Liability),
+    ("customer:alex", AccountKind::Liability),
     ("settlement:card-network", AccountKind::Liability),
     ("revenue:fees", AccountKind::Revenue),
 ];

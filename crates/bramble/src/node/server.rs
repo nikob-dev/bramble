@@ -4,18 +4,22 @@ use axum::Router;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::{IntoResponse, Json};
-use axum::routing::get;
+use axum::routing::{get, post};
 use bramble_core::PROTOCOL_VERSION;
 use bramble_core::protocol::{ClientMsg, ServerMsg};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
 
-use super::Shared;
+use super::{Shared, api, now_unix};
 
 pub async fn serve(bind: &str, shared: Arc<Shared>) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/state", get(state))
+        .route("/api/entries", post(api::post_entry))
+        .route("/api/statements/card-network", get(api::statement))
+        .route("/api/files/{name}", get(api::file))
+        .route("/api/keys/node.pem", get(api::public_key))
         .route("/ws", get(ws))
         .with_state(shared);
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -25,7 +29,7 @@ pub async fn serve(bind: &str, shared: Arc<Shared>) -> anyhow::Result<()> {
 }
 
 async fn state(State(shared): State<Arc<Shared>>) -> Json<ServerMsg> {
-    Json(shared.world.lock().await.snapshot(None))
+    Json(shared.world.lock().await.snapshot(None, now_unix()))
 }
 
 async fn ws(upgrade: WebSocketUpgrade, State(shared): State<Arc<Shared>>) -> impl IntoResponse {
@@ -36,7 +40,7 @@ async fn client_session(socket: WebSocket, shared: Arc<Shared>) {
     let (mut sink, mut stream) = socket.split();
     let mut updates = shared.updates.subscribe();
 
-    let hello = shared.world.lock().await.snapshot(None);
+    let hello = shared.world.lock().await.snapshot(None, now_unix());
     if send(&mut sink, &hello).await.is_err() {
         return;
     }
@@ -51,7 +55,7 @@ async fn client_session(socket: WebSocket, shared: Arc<Shared>) {
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     tracing::warn!(skipped, "client lagged; sending fresh snapshot");
-                    let snapshot = shared.world.lock().await.snapshot(None);
+                    let snapshot = shared.world.lock().await.snapshot(None, now_unix());
                     if send(&mut sink, &snapshot).await.is_err() {
                         break;
                     }
@@ -91,7 +95,7 @@ async fn handle_client_msg(shared: &Shared, text: &str) {
             }
             tracing::info!(cmd = %observation.cmd, exit_code = observation.exit_code, "lab observation");
             let mut world = shared.world.lock().await;
-            match world.observe(&observation) {
+            match world.observe(&observation, now_unix()) {
                 Ok(Some(update)) => {
                     let _ = shared.updates.send(update);
                 }

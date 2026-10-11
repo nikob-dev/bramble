@@ -1,5 +1,7 @@
 use bramble_core::pet::Mood;
-use bramble_core::protocol::{LessonView, PetView, StepKind};
+use bramble_core::protocol::{
+    ActivityView, ConceptStatus, ConceptView, LessonView, PetView, StepKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -10,10 +12,15 @@ use tui_term::widget::PseudoTerminal;
 const MIN_TOP_HEIGHT: u16 = 13;
 const MAX_TOP_HEIGHT: u16 = 20;
 const PET_WIDTH: u16 = 38;
+const MASTERY_WIDTH: u16 = 30;
+/// Below this width the mastery column is hidden so the lesson stays readable.
+const MASTERY_MIN_TOTAL_WIDTH: u16 = 120;
 
 pub struct View<'a> {
     pub pet: Option<&'a PetView>,
     pub lesson: Option<&'a LessonView>,
+    pub mastery: &'a [ConceptView],
+    pub activity: Option<&'a ActivityView>,
     pub say: Option<&'a str>,
     pub node_status: Option<&'a str>,
     pub frame: u64,
@@ -23,6 +30,7 @@ pub struct View<'a> {
 pub struct Areas {
     pub pet: Rect,
     pub lesson: Rect,
+    pub mastery: Option<Rect>,
     pub lab: Rect,
 }
 
@@ -30,9 +38,29 @@ pub fn areas(area: Rect) -> Areas {
     let top_height = (area.height * 2 / 5).clamp(MIN_TOP_HEIGHT, MAX_TOP_HEIGHT);
     let [top, lab] =
         Layout::vertical([Constraint::Length(top_height), Constraint::Min(5)]).areas(area);
-    let [pet, lesson] =
-        Layout::horizontal([Constraint::Length(PET_WIDTH), Constraint::Min(20)]).areas(top);
-    Areas { pet, lesson, lab }
+    if area.width >= MASTERY_MIN_TOTAL_WIDTH {
+        let [pet, lesson, mastery] = Layout::horizontal([
+            Constraint::Length(PET_WIDTH),
+            Constraint::Min(20),
+            Constraint::Length(MASTERY_WIDTH),
+        ])
+        .areas(top);
+        Areas {
+            pet,
+            lesson,
+            mastery: Some(mastery),
+            lab,
+        }
+    } else {
+        let [pet, lesson] =
+            Layout::horizontal([Constraint::Length(PET_WIDTH), Constraint::Min(20)]).areas(top);
+        Areas {
+            pet,
+            lesson,
+            mastery: None,
+            lab,
+        }
+    }
 }
 
 /// Rows and columns available to the lab shell inside its border.
@@ -47,7 +75,10 @@ pub fn lab_size(area: Rect) -> (u16, u16) {
 pub fn draw(frame: &mut Frame, view: &View) {
     let areas = areas(frame.area());
     draw_pet(frame, areas.pet, view);
-    draw_lesson(frame, areas.lesson, view.lesson);
+    draw_lesson(frame, areas.lesson, view.lesson, view.activity);
+    if let Some(area) = areas.mastery {
+        draw_mastery(frame, area, view.mastery);
+    }
     draw_lab(frame, areas.lab, view);
 }
 
@@ -132,10 +163,21 @@ fn bar(value: u8, color: Color) -> Span<'static> {
     )
 }
 
-fn draw_lesson(frame: &mut Frame, area: Rect, lesson: Option<&LessonView>) {
+fn draw_lesson(
+    frame: &mut Frame,
+    area: Rect,
+    lesson: Option<&LessonView>,
+    activity: Option<&ActivityView>,
+) {
     let Some(lesson) = lesson else {
-        let block = Block::bordered().title(" lesson ");
-        frame.render_widget(Paragraph::new("No lessons loaded.").block(block), area);
+        let block = Block::bordered()
+            .title(" all caught up ".bold())
+            .border_style(Style::new().fg(Color::Blue));
+        let text = activity.map_or("Waiting for the node…", |a| a.reason.as_str());
+        frame.render_widget(
+            Paragraph::new(text).wrap(Wrap { trim: false }).block(block),
+            area,
+        );
         return;
     };
     let progress = if lesson.completed {
@@ -148,24 +190,36 @@ fn draw_lesson(frame: &mut Frame, area: Rect, lesson: Option<&LessonView>) {
         .title(Line::from(format!(" {progress} ")).right_aligned())
         .border_style(Style::new().fg(Color::Blue));
 
-    let mut lines: Vec<Line> = reflow(&lesson.text).into_iter().map(Line::raw).collect();
-    if let Some(hint) = &lesson.hint {
+    // Revealed help goes first: the learner has already read the prompt, and on short
+    // terminals anything at the bottom of the panel gets clipped.
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(example) = &lesson.worked_example {
+        lines.push(Line::from("worked example:".bold().green()));
+        // Verbatim: worked examples are commands, so never reflow them.
+        lines.extend(
+            example
+                .trim_matches('\n')
+                .lines()
+                .map(|l| Line::from(l.to_owned().green())),
+        );
         lines.push(Line::raw(""));
+    }
+    if let Some(hint) = &lesson.hint {
         lines.push(Line::from(vec![
             Span::raw("hint: ").bold().yellow(),
             Span::raw(hint.clone()).yellow(),
         ]));
+        lines.push(Line::raw(""));
+    }
+    lines.extend(reflow(&lesson.text).into_iter().map(Line::raw));
+    if lesson.completed && !lesson.sources.is_empty() {
+        lines.push(Line::raw(""));
+        for source in &lesson.sources {
+            lines.push(Line::from(format!("source: {}", source.title).dim()));
+        }
     }
     let footer = match (lesson.completed, lesson.kind) {
-        (true, _) => {
-            let sources = lesson
-                .sources
-                .iter()
-                .map(|s| s.title.as_str())
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!("source: {sources}")
-        }
+        (true, _) => "▶ run `bramble next` and I'll pick what's next".to_owned(),
         (false, StepKind::Explain) => "▶ run `bramble next` to continue".to_owned(),
         (false, StepKind::Task) => "stuck? run `bramble hint`".to_owned(),
     };
@@ -202,6 +256,39 @@ fn reflow(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+fn draw_mastery(frame: &mut Frame, area: Rect, mastery: &[ConceptView]) {
+    let block = Block::bordered()
+        .title(" mastery ".bold())
+        .border_style(Style::new().fg(Color::Yellow));
+    let width = usize::from(area.width.saturating_sub(2));
+    let lines: Vec<Line> = mastery
+        .iter()
+        .map(|concept| {
+            let (marker, color) = match concept.status {
+                ConceptStatus::Mastered => ("✓", Color::Green),
+                ConceptStatus::Learning => ("◐", Color::Yellow),
+                ConceptStatus::Ready => ("○", Color::Cyan),
+                ConceptStatus::Locked => ("·", Color::DarkGray),
+            };
+            let detail = match concept.status {
+                ConceptStatus::Locked => "locked".to_owned(),
+                // Unstudied: the percentage would only be the model's prior, not progress.
+                ConceptStatus::Ready => "new".to_owned(),
+                _ if concept.review_due => "review!".to_owned(),
+                _ => format!("{:>3.0}%", concept.p_known * 100.0),
+            };
+            let name_width = width.saturating_sub(detail.chars().count() + 3);
+            let name: String = concept.title.chars().take(name_width).collect();
+            Line::from(vec![
+                Span::styled(format!("{marker} "), Style::new().fg(color)),
+                Span::raw(format!("{name:<name_width$} ")),
+                Span::styled(detail, Style::new().fg(color)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn draw_lab(frame: &mut Frame, area: Rect, view: &View) {

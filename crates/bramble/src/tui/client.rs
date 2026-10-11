@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 pub enum NodeEvent {
     Connected,
     Disconnected(String),
-    Message(ServerMsg),
+    Message(Box<ServerMsg>),
 }
 
 pub async fn run(
@@ -30,7 +30,7 @@ pub async fn run(
                         incoming = stream.next() => match incoming {
                             Some(Ok(Message::Text(text))) => match serde_json::from_str::<ServerMsg>(text.as_str()) {
                                 Ok(msg) => {
-                                    if events.send(NodeEvent::Message(msg)).is_err() {
+                                    if events.send(NodeEvent::Message(Box::new(msg))).is_err() {
                                         return;
                                     }
                                 }

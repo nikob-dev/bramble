@@ -1,0 +1,54 @@
+# The Ledgers track. Order matters only to break ties: prerequisites always come first.
+
+[[concepts]]
+id = "money-is-rows"
+title = "Money is rows"
+track = "ledgers"
+objectives = [
+    "Explain an account balance as the sum of its postings",
+    "Query a balance directly from the ledger with SQL",
+    "Explain why a customer deposit is a liability on the bank's books",
+]
+
+[[concepts]]
+id = "double-entry"
+title = "Double-entry"
+track = "ledgers"
+prereqs = ["money-is-rows"]
+objectives = [
+    "Post a balanced transfer through a payments API",
+    "Predict why an unbalanced entry is rejected, in code and in the database",
+    "Prove the books balance: every posting sums to zero",
+]
+
+[[concepts]]
+id = "idempotency"
+title = "Idempotency"
+track = "ledgers"
+prereqs = ["double-entry"]
+objectives = [
+    "Find a duplicate charge in the ledger",
+    "Retry a payment safely with an idempotency key",
+    "Fix a mistake with a reversing entry instead of an edit",
+]
+
+[[concepts]]
+id = "reconciliation"
+title = "Reconciliation"
+track = "ledgers"
+prereqs = ["double-entry"]
+objectives = [
+    "Compare a counterparty's settlement report against the ledger",
+    "Find and name the entry behind a break",
+]
+
+[[concepts]]
+id = "hashing-signatures"
+title = "Hashing & signatures"
+track = "ledgers"
+prereqs = ["money-is-rows"]
+objectives = [
+    "Verify a payment file's integrity with SHA-256",
+    "Verify who signed a payment file with an Ed25519 signature",
+    "Explain what a hash proves and what only a signature proves",
+]
