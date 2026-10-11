@@ -103,6 +103,81 @@ struct BankPosition {
     net_minor: i64,
 }
 
+#[derive(serde::Deserialize)]
+struct Statement {
+    balance_minor: i64,
+    movements: Vec<Movement>,
+}
+
+#[derive(serde::Deserialize)]
+struct Movement {
+    entry_id: i64,
+    memo: String,
+    amount_minor: i64,
+}
+
+fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> anyhow::Result<T> {
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let response = reqwest::Client::new()
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("reaching {url}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            anyhow::bail!("{url} answered {status}");
+        }
+        Ok(response.json().await?)
+    })
+}
+
+/// Compares our books with the operator's statement of our account. Exit status 1 on
+/// a break, so scripts and lessons can check it.
+pub fn reconcile(config: &Config) -> anyhow::Result<()> {
+    let path = config.ledger_path();
+    let ledger = Ledger::open_read_only(&path).with_context(|| {
+        format!(
+            "opening ledger at {} (is the node running?)",
+            path.display()
+        )
+    })?;
+    let ours = ledger.balance(bramble_ledger::rails::RESERVES_AT_OPERATOR)?;
+    let statement: Statement = get_json(&format!(
+        "{}/api/statements/{}",
+        config.operator_url, config.node_id
+    ))?;
+    let theirs = statement.balance_minor;
+
+    println!("Reserves at the operator, {}:\n", config.node_id);
+    println!(
+        "  our books (reserves:operator)   {:>14}",
+        format_minor(ours)
+    );
+    println!(
+        "  operator's statement            {:>14}",
+        format_minor(theirs)
+    );
+    println!(
+        "  difference                      {:>14}\n",
+        format_minor(ours - theirs)
+    );
+    if ours == theirs {
+        println!("✓ Reconciled: both sides agree.");
+        return Ok(());
+    }
+    println!("✗ Break. The operator's last movements on our account:\n");
+    for movement in statement.movements.iter().take(8) {
+        println!(
+            "  #{:<5} {:>12}  {}",
+            movement.entry_id,
+            format_minor(movement.amount_minor),
+            movement.memo
+        );
+    }
+    println!("\nCompare them with `bramble ledger postings reserves:operator`.");
+    std::process::exit(1);
+}
+
 fn cutoff(config: &Config) -> anyhow::Result<()> {
     let url = format!("{}/api/ach/cutoff", config.operator_url);
     let response = tokio::runtime::Runtime::new()?.block_on(async {

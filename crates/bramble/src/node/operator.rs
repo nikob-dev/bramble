@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::{get, post};
@@ -141,6 +141,7 @@ fn router(operator: Arc<Operator>) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/books", get(books))
         .route("/api/ach/cutoff", post(cutoff))
+        .route("/api/statements/{bank}", get(statement))
         .with_state(operator)
 }
 
@@ -155,6 +156,53 @@ async fn books(State(operator): State<Arc<Operator>>) -> Json<Vec<AccountBalance
             Vec::new()
         });
     Json(accounts)
+}
+
+/// A bank's account at the operator, from the bank's point of view (money in is
+/// positive): what a central bank's account statement shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct Statement {
+    pub bank: String,
+    pub balance_minor: i64,
+    /// Newest first.
+    pub movements: Vec<Movement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct Movement {
+    pub entry_id: i64,
+    pub memo: String,
+    pub amount_minor: i64,
+}
+
+pub fn statement_for(ledger: &Ledger, bank: &str) -> bramble_ledger::Result<Statement> {
+    let account = operator_account(bank);
+    // The operator's liability is the bank's asset: flip every sign.
+    let balance_minor = -ledger.balance(&account)?;
+    let movements = ledger
+        .postings(Some(&account))?
+        .into_iter()
+        .map(|row| Movement {
+            entry_id: row.entry_id,
+            memo: row.memo,
+            amount_minor: -row.amount_minor,
+        })
+        .collect();
+    Ok(Statement {
+        bank: bank.to_owned(),
+        balance_minor,
+        movements,
+    })
+}
+
+/// `GET /api/statements/{bank}`: 200 with the statement, 404 for a non-member.
+async fn statement(
+    State(operator): State<Arc<Operator>>,
+    Path(bank): Path<String>,
+) -> Result<Json<Statement>, StatusCode> {
+    statement_for(&*operator.ledger.lock().await, &bank)
+        .map(Json)
+        .map_err(|_| StatusCode::NOT_FOUND)
 }
 
 /// `POST /api/ach/cutoff`: 200 with the window's report, 409 if it could not settle.
@@ -503,5 +551,46 @@ async fn decide(
                 Status::rejected(format!("settlement failed: {error}"))
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bramble_ledger::rails::{OPENING_RESERVES, Rail, Rtp, Transfer, open_operator};
+
+    use super::*;
+
+    #[test]
+    fn operator_statement_shows_the_banks_side_of_its_account() {
+        let mut ledger = Ledger::open_in_memory().expect("ledger");
+        open_operator(&mut ledger, &["pet-a", "pet-b"]).expect("open");
+        let transfer = Transfer {
+            debtor_bank: "pet-a".into(),
+            debtor_account: "customer:you".into(),
+            creditor_bank: "pet-b".into(),
+            creditor_account: "customer:alex".into(),
+            amount_minor: 1_200,
+        };
+        ledger
+            .post(&NewEntry {
+                memo: "RTP pet-a → pet-b".into(),
+                idempotency_key: None,
+                postings: Rtp.operator_postings(&transfer),
+            })
+            .expect("settle");
+
+        let a = statement_for(&ledger, "pet-a").expect("statement");
+        assert_eq!(a.balance_minor, OPENING_RESERVES - 1_200);
+        assert_eq!(
+            a.movements[0].amount_minor, -1_200,
+            "newest first, money out negative"
+        );
+        assert_eq!(a.movements[1].amount_minor, OPENING_RESERVES);
+        let b = statement_for(&ledger, "pet-b").expect("statement");
+        assert_eq!(b.balance_minor, OPENING_RESERVES + 1_200);
+        assert!(
+            statement_for(&ledger, "pet-z").is_err(),
+            "non-members have no account"
+        );
     }
 }

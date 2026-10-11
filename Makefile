@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: test lint build up start play network peers logs down reset e2e e2e-smoke e2e-lab clean-docker
+.PHONY: test lint build up start play network peers logs down reset e2e e2e-smoke e2e-lab e2e-net clean-docker
 
 test:
 	docker compose run --rm dev cargo test --workspace
@@ -56,12 +56,20 @@ reset:
 # Isolated project + port so the e2e tests never touch your pet's data.
 # Each script gets a fresh pet: the lab checks need lesson 1 from the start.
 E2E = BRAMBLE_PET_A_PORT=18081 docker compose -p bramble-e2e
-e2e: e2e-lab e2e-smoke
+e2e: e2e-lab e2e-smoke e2e-net
 
 e2e-smoke:
 	$(E2E) up --build --wait -d pet-a
 	$(PYTHON) tests/e2e/tui_smoke.py bramble-e2e http://localhost:18081; \
 	status=$$?; $(E2E) down -v; exit $$status
+
+# The whole network (3 banks + operator) on its own ports: RTP, ACH cutoff, reconciliation.
+E2E_NET = BRAMBLE_PET_A_PORT=18281 BRAMBLE_PET_B_PORT=18282 BRAMBLE_PET_C_PORT=18283 \
+	BRAMBLE_OPERATOR_PORT=18290 docker compose -p bramble-e2e-net
+e2e-net:
+	$(E2E_NET) up --build --wait -d $(NODES)
+	$(PYTHON) tests/e2e/network_smoke.py bramble-e2e-net; \
+	status=$$?; $(E2E_NET) down -v; exit $$status
 
 e2e-lab:
 	$(E2E) up --build --wait -d pet-a
