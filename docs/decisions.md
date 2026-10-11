@@ -1,7 +1,7 @@
 # Decision log
 
 ## 001 — Debian slim runtime instead of distroless (2026-10-11)
-**Context:** Lessons run real commands (`bash`, `curl`, `openssl`, `sqlite3`) inside the pet's container.
+**Context:** Lessons run real commands (`bash`, `curl`, `openssl`, `sqlite3`) inside the pet's container, and learners page through files with `less`.
 **Decision:** Use `debian:12.15-slim` as the runtime base and install only those tools.
 **Trade-off:** Larger image and attack surface than distroless; accepted because the lab is the product.
 

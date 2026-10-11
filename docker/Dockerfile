@@ -49,10 +49,10 @@ RUN apt-get update \
 COPY . .
 RUN cd crates/bramble-web && trunk build --release
 
-# ---- runtime: slim Debian (labs need bash, curl, openssl, sqlite3; see docs/decisions.md) ----
+# ---- runtime: slim Debian (labs need bash, curl, openssl, sqlite3, less; see docs/decisions.md) ----
 FROM ${RUNTIME_IMAGE} AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl openssl sqlite3 procps \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl less openssl sqlite3 procps \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --shell /bin/bash pet \
     && useradd --create-home --shell /bin/bash learner \
