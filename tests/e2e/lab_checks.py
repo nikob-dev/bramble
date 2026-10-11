@@ -7,6 +7,7 @@ Usage: python3 tests/e2e/lab_checks.py <compose-project> <node-url>
 Run via `make e2e` or `make e2e-lab`, which use an isolated compose project. Stdlib only.
 """
 import fcntl
+import re
 import socket
 import struct
 import subprocess
@@ -23,6 +24,13 @@ PAY_ALEX_MULTILINE = """curl -s -X POST localhost:8080/api/entries -H 'Content-T
   -d '{"memo": "Pay Alex", "postings": [
         {"account": "customer:you",  "amount_minor": 1200},
         {"account": "customer:alex", "amount_minor": -1200}]}'"""
+
+
+def drew(term, text):
+    """Whether the TUI drew `text`. It positions words with cursor moves rather than
+    spaces, so compare with escape sequences and whitespace removed."""
+    plain = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]|\s", b"", term.output)
+    return re.sub(r"\s", "", text).encode() in plain
 
 
 def check(name, ok, detail=""):
@@ -105,6 +113,23 @@ def answers(host, port):
 def main():
     term = Terminal()
     try:
+        # 8: a learner answering the pet in prose opens a quote with an apostrophe; the
+        # continuation prompt must say how to get out, and Ctrl-C must recover.
+        s = state()
+        term.output = b""
+        term.type("Sure thing! it's rows in a database?")
+        stuck_hint = drew(term, "Ctrl-C to cancel")
+        keys(term, b"\x03", 1.0)
+        term.type("bramble next")
+        check("prose with an apostrophe explains the stuck prompt, Ctrl-C recovers",
+              stuck_hint and step(state()) != step(s),
+              f"hint shown={stuck_hint}, step {step(s)} → {step(state())}")
+
+        term.output = b""
+        term.type("is it a store of value")
+        check("prose without quotes gets the pet's 'this is a shell' hint",
+              drew(term, "looks like a sentence"), "hint not drawn")
+
         # 4 + 5: full-screen programs and resizing must not break command observation.
         s = advance_to(term, "money-is-rows", "list-postings")
         keys(term, b"less /etc/os-release\r", 1.5)

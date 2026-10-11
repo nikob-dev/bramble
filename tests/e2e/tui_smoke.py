@@ -125,15 +125,17 @@ class Terminal:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.execvp("docker", ["docker", "compose", "-p", PROJECT, "exec", "-it", "-u", "learner", "pet-a", "bramble", "tui"])
+        self.output = b""
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 45, 140, 0, 0))
         self.drain(4)
 
     def drain(self, seconds):
+        """Read what the TUI draws for a while; keeps the most recent screen updates."""
         end = time.time() + seconds
         while time.time() < end:
             if select.select([self.fd], [], [], 0.1)[0]:
                 try:
-                    os.read(self.fd, 65536)
+                    self.output = (self.output + os.read(self.fd, 65536))[-200_000:]
                 except OSError:
                     return
 
