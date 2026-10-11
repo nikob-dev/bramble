@@ -40,3 +40,8 @@
 ## 009 — Fast-track only skips steps that later steps don't need (2026-10-11)
 **Context:** Fast-track drops `scaffold = true` steps. The first full-track e2e run showed that a dependent step (e.g. querying `scratch.db`) breaks if its setup step was skipped.
 **Decision:** Any step that follows a scaffold step repeats the setup command in its prompt ("No scratch copy yet? …"). The Teacher only claims a fast-track when the next lesson actually has scaffold steps. Every task has a stable `id`, which the event log and the adaptive e2e test key on.
+
+## 010 — The browser is a live dashboard; the terminal stays the lab (2026-10-11)
+**Context:** M3 adds a browser UI. Lessons are verified by watching real shell commands, which only exist in the TUI's lab.
+**Decision:** The Leptos app shows pet, lesson, mastery map, and the books, live over the same WebSocket as the TUI. It sends nothing. State messages carry a ledger view, and the node broadcasts after every API post, so a `curl` payment shows up in the browser instantly.
+**Implementation notes:** WebSocket via raw `web-sys` (visible open/message/close/reconnect, no extra crates). Unknown messages are skipped, never fatal. `wasm-bindgen` is pinned exactly because trunk downloads the matching CLI. trunk 0.21.14 is installed from release binaries with **pinned SHA-256s** in the Dockerfile, so a tampered release fails the build. Text reflow and pet art moved into `bramble-core` so both clients render identically.
