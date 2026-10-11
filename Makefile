@@ -1,4 +1,7 @@
 PYTHON ?= python3
+# All four nodes: your bank, two counterparty banks, and the operator (decision 015).
+# The Rails lessons need the whole network, so starting your pet starts all four.
+NODES = pet-a pet-b pet-c operator
 
 .PHONY: test lint build up start play network peers logs down reset e2e e2e-smoke e2e-lab e2e-net clean-docker
 
@@ -13,19 +16,17 @@ build:
 
 # Rebuild after code changes.
 up:
-	docker compose up --build --wait -d pet-a
+	docker compose up --build --wait -d $(NODES)
 
 # Start the existing image (builds only if none exists), so playing never needs the network.
 start:
-	docker compose up --wait -d pet-a
+	docker compose up --wait -d $(NODES)
 
 play: start
 	docker compose exec -it -u learner pet-a bramble tui
 
-# All four nodes: your bank, two counterparty banks, and the operator (decision 015).
-NODES = pet-a pet-b pet-c operator
-network:
-	docker compose up --build --wait -d $(NODES)
+# Same as `up`; kept because the docs and checklist use it.
+network: up
 
 # Which peers each node has discovered (the peer port is only reachable inside compose).
 peers:
@@ -55,11 +56,12 @@ reset:
 
 # Isolated project + port so the e2e tests never touch your pet's data.
 # Each script gets a fresh pet: the lab checks need lesson 1 from the start.
-E2E = BRAMBLE_PET_A_PORT=18081 docker compose -p bramble-e2e
+E2E = BRAMBLE_PET_A_PORT=18081 BRAMBLE_PET_B_PORT=18082 BRAMBLE_PET_C_PORT=18083 \
+	BRAMBLE_OPERATOR_PORT=18090 docker compose -p bramble-e2e
 e2e: e2e-lab e2e-smoke e2e-net
 
 e2e-smoke:
-	$(E2E) up --build --wait -d pet-a
+	$(E2E) up --build --wait -d $(NODES)
 	$(PYTHON) tests/e2e/tui_smoke.py bramble-e2e http://localhost:18081; \
 	status=$$?; $(E2E) down -v; exit $$status
 

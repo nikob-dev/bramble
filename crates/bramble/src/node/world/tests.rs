@@ -59,7 +59,7 @@ fn world_starts_with_money_is_rows_and_says_why() {
     assert_eq!(lesson.expect("lesson").id, "money-is-rows");
     assert_eq!(activity.kind, ActivityKind::Lesson);
     assert!(activity.reason.contains("beginning"));
-    assert_eq!(mastery.len(), 5);
+    assert_eq!(mastery.len(), 9, "Ledgers (5) + Rails (4)");
 }
 
 #[test]

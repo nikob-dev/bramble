@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -21,8 +22,10 @@ import time
 import urllib.request
 
 PROJECT, URL = sys.argv[1], sys.argv[2]
-MAX_ROUNDS = 150
-GAS_ENTRY = "{GAS_ENTRY_ID}"
+MAX_ROUNDS = 250
+# `{SETUP:<lesson>:<key>}` in a solution becomes the id of the entry that lesson's setup
+# planted: what a learner would read off their SQL output.
+SETUP_ENTRY = re.compile(r"\{SETUP:([^}]+)\}")
 
 LEDGER = "$BRAMBLE_DATA_DIR/ledger.db"
 POST = "curl -s -X POST localhost:8080/api/entries -H 'Content-Type: application/json'"
@@ -32,6 +35,13 @@ def entry(memo, *postings, key=None):
     legs = ", ".join(f'{{"account": "{a}", "amount_minor": {n}}}' for a, n in postings)
     header = f" -H 'Idempotency-Key: {key}'" if key else ""
     return f"""{POST}{header} -d '{{"memo": "{memo}", "postings": [{legs}]}}'"""
+
+
+def payment(rail, to_bank, amount, key):
+    body = (f'{{"from_account": "customer:you", "to_bank": "{to_bank}", '
+            f'"to_account": "customer:alex", "amount_minor": {amount}, "memo": "e2e"}}')
+    return (f"curl -s -X POST localhost:8080/api/{rail}/payments -H 'Content-Type: application/json' "
+            f"-H 'Idempotency-Key: {key}' -d '{body}'")
 
 
 def sql(query, db=LEDGER, readonly=True):
@@ -78,7 +88,7 @@ SOLUTIONS = {
             "JOIN l.journal_entries AS e ON e.memo LIKE '%' || s.network_ref || '%' "
             "JOIN l.postings AS p ON p.entry_id = e.id AND p.account_id = 'customer:you' "
             "WHERE p.amount_minor <> CAST(s.amount_minor AS INTEGER);", db="~/lab/recon.db", readonly=False),
-        f"bramble answer {GAS_ENTRY}",
+        "bramble answer {SETUP:reconciliation:gas-station}",
     ],
     ("reconciliation", "transposition"): ["bramble answer b"],
     ("reconciliation", "divisible-by-nine"): ["bramble answer a"],
@@ -101,6 +111,44 @@ SOLUTIONS = {
     ("hashing-signatures", "hash-vs-signature"): ["bramble answer b"],
     ("hashing-signatures", "avalanche"): ["bramble answer b"],
     ("hashing-signatures", "who-can-sign"): ["bramble answer b"],
+    # Rails track (needs the whole network up).
+    ("instant-payments", "my-reserves"): [sql("SELECT SUM(amount_minor) FROM postings WHERE account_id = 'reserves:operator';")],
+    ("instant-payments", "operator-statement"): ["curl -s operator:8080/api/statements/pet-a"],
+    ("instant-payments", "send-rtp"): [payment("rtp", "pet-b", 2500, "dinner-1")],
+    ("instant-payments", "retry-rtp"): [payment("rtp", "pet-b", 2500, "dinner-1")],
+    ("instant-payments", "finality"): ["bramble answer b"],
+    ("instant-payments", "rtp-whose-books"): ["bramble answer b"],
+    ("instant-payments", "rtp-timeout"): ["bramble answer b"],
+    ("batch-payments", "queue-ach"): [payment("ach", "pet-c", 4000, "rent-share-1")],
+    ("batch-payments", "reserves-unchanged"): [sql("SELECT SUM(amount_minor) FROM postings WHERE account_id = 'reserves:operator';")],
+    ("batch-payments", "see-file"): ["bramble ach pending"],
+    ("batch-payments", "record-types"): ["bramble answer b"],
+    ("batch-payments", "cutoff"): ["bramble ach cutoff"],
+    ("batch-payments", "clearing-empty"): ["bramble ledger accounts"],
+    ("batch-payments", "ach-when-moves"): ["bramble answer b"],
+    ("batch-payments", "ach-unknown-account"): ["bramble answer b"],
+    ("netting", "net-position"): ["bramble answer b"],
+    ("netting", "queue-three"): [
+        "for amount in 500 700 900; do curl -s -X POST localhost:8080/api/ach/payments "
+        "-H 'Content-Type: application/json' -H \"Idempotency-Key: split-$amount\" "
+        "-d \"{\\\"from_account\\\": \\\"customer:you\\\", \\\"to_bank\\\": \\\"pet-b\\\", "
+        "\\\"to_account\\\": \\\"customer:alex\\\", \\\"amount_minor\\\": $amount}\"; echo; done",
+    ],
+    ("netting", "settle-window"): ["bramble ach cutoff"],
+    ("netting", "find-settlement"): [sql(
+        "SELECT e.id, e.memo, p.amount_minor FROM postings AS p JOIN journal_entries AS e ON e.id = p.entry_id "
+        "WHERE p.account_id = 'reserves:operator' ORDER BY e.id DESC LIMIT 3;")],
+    ("netting", "why-net"): ["bramble answer a"],
+    ("netting", "net-sign"): ["bramble answer a"],
+    ("netting", "gross-or-net"): ["bramble answer a"],
+    ("interbank-reconciliation", "see-break"): ["bramble reconcile"],
+    ("interbank-reconciliation", "find-phantom"): ["bramble answer {SETUP:interbank-reconciliation:phantom-rtp}"],
+    ("interbank-reconciliation", "reverse-it"): [entry(
+        "Reversal: RTP never settled", ("reserves:operator", -2500), ("customer:you", 2500), key="reverse-phantom")],
+    ("interbank-reconciliation", "reconciled"): ["bramble reconcile"],
+    ("interbank-reconciliation", "whose-number"): ["bramble answer b"],
+    ("interbank-reconciliation", "break-direction"): ["bramble answer a"],
+    ("interbank-reconciliation", "fix-a-break"): ["bramble answer b"],
 }
 
 
@@ -109,9 +157,9 @@ def state():
         return json.load(response)
 
 
-def gas_entry_id():
+def setup_entry_id(lesson_and_key):
     """What a learner reads off their SQL output; the test asks the container directly."""
-    query = "SELECT id FROM journal_entries WHERE idempotency_key = 'setup:reconciliation:gas-station';"
+    query = f"SELECT id FROM journal_entries WHERE idempotency_key = 'setup:{lesson_and_key}';"
     out = subprocess.run(
         ["docker", "compose", "-p", PROJECT, "exec", "-T", "pet-a",
          "sqlite3", "-readonly", "/var/lib/bramble/ledger.db", query],
@@ -173,7 +221,7 @@ def main():
                 key = (base, lesson["step_id"])
                 if key not in SOLUTIONS:
                     sys.exit(f"no solution for {key}")
-                commands = [c.replace(GAS_ENTRY, gas_entry_id()) if GAS_ENTRY in c else c for c in SOLUTIONS[key]]
+                commands = [SETUP_ENTRY.sub(lambda m: setup_entry_id(m.group(1)), c) for c in SOLUTIONS[key]]
                 label = lesson["step_id"]
             before = position(s)
             for command in commands:

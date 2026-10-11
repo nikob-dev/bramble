@@ -1,0 +1,169 @@
+id = "instant-payments"
+title = "Instant payments (RTP)"
+concept = "instant-payments"
+
+[[sources]]
+title = "The Clearing House: The RTP network"
+url = "https://www.theclearinghouse.org/payment-systems/rtp"
+
+[[sources]]
+title = "Federal Reserve: About the FedNow Service"
+url = "https://www.federalreserve.gov/paymentsystems/fednow_about.htm"
+
+# Payday, so you have money to send whatever happened in earlier lessons.
+[[setup.entries]]
+key = "payday"
+memo = "Paycheck (direct deposit)"
+debit = "reserves"
+credit = "customer:you"
+amount_minor = 50000
+
+[[steps]]
+kind = "explain"
+text = """
+I'm not the only bank anymore! Meet my neighbours: fern (pet-b) and moss (pet-c).
+Your friend Alex banks at fern.
+
+Here's the thing: banks don't pay each other directly. Each one keeps an account at an
+OPERATOR (a central bank or clearing house), and money moves between banks by moving
+balances on the operator's books. In my books, my balance there is called
+reserves:operator. It's an asset: the operator owes it to me.
+
+(Payday! Your paycheck just landed: $500.00.)
+"""
+
+[[steps]]
+kind = "task"
+id = "my-reserves"
+prompt = """
+How much money do I hold at the operator? Sum it from the ledger yourself:
+
+  sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db
+
+Inside: add up amount_minor for account_id = 'reserves:operator'.
+"""
+hint = """sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'reserves:operator';\""""
+success = "That's my balance at the operator, in cents. Every interbank payment I make has to come out of it."
+check = { type = "ledger_balance", account = "reserves:operator", command = '^sqlite3\b' }
+
+[[steps]]
+kind = "task"
+id = "operator-statement"
+prompt = """
+The operator keeps its own books, and it will tell me what it thinks I have. Ask it for
+my statement (the operator lives at operator:8080 on our network):
+
+  curl -s operator:8080/api/statements/pet-a
+
+Compare its balance_minor with the number you just computed.
+"""
+hint = "Run: curl -s operator:8080/api/statements/pet-a"
+success = "Same number, kept by a different party. Two books, one truth: hold onto that idea."
+check = { type = "command_ran", pattern = '^curl\b.*operator:8080/api/statements/pet-a' }
+
+[[steps]]
+kind = "explain"
+text = """
+RTP means real-time payments. One payment at a time, settled immediately:
+
+  1. I check you have the money and send the payment to the operator.
+  2. The operator checks that I have enough reserves, then asks fern: "do you have this
+     customer?"
+  3. fern says yes, and the operator SETTLES: it moves my reserves to fern. That's FINAL.
+  4. fern and I each book our side.
+
+In the US, The Clearing House's RTP network and the Federal Reserve's FedNow Service
+work like this, around the clock, every day of the year.
+"""
+
+[[steps]]
+kind = "task"
+id = "send-rtp"
+prompt = '''
+Pay Alex at fern $25.00, instantly. POST to my RTP API with an Idempotency-Key header:
+
+  POST localhost:8080/api/rtp/payments
+  {"from_account": ..., "to_bank": "pet-b", "to_account": "customer:alex",
+   "amount_minor": ..., "memo": ...}
+'''
+hint = "from_account is customer:you, amount_minor is 2500 (cents). Add -H 'Idempotency-Key: dinner-1'."
+worked_example = '''
+curl -s -X POST localhost:8080/api/rtp/payments \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: dinner-1' \
+  -d '{"from_account": "customer:you", "to_bank": "pet-b", "to_account": "customer:alex",
+       "amount_minor": 2500, "memo": "Dinner"}'
+
+"status": "settled" means the operator moved the money and it's final.
+'''
+success = "Settled! Watch the dashboard: my reserves went down $25.00. Fern's (port 8082) went up by the same."
+check = { type = "entry_exists", postings = [
+    { account = "customer:you", amount_minor = 2500 },
+    { account = "reserves:operator", amount_minor = -2500 },
+] }
+
+[[steps]]
+kind = "task"
+id = "retry-rtp"
+prompt = """
+Networks fail, and clients retry. Send the exact same request again, with the same
+Idempotency-Key. Did Alex get paid twice?
+"""
+hint = "Press the up arrow to recall the curl command and run it again unchanged."
+success = "\"replayed\": true. Same key, same payment: nothing moved twice. That's idempotency, across three banks."
+check = { type = "output_matches", pattern = '"replayed"\s*:\s*true', command = '^curl\b.*rtp/payments' }
+
+[[steps]]
+kind = "task"
+id = "finality"
+prompt = """
+Quiz: the operator has settled your RTP payment. Five minutes later you regret it. Can
+my bank pull the money back from fern?
+
+  a) Yes, within 24 hours
+  b) No: settlement is final. Getting it back means asking fern (or Alex) to send it back.
+  c) Only for amounts under $100
+
+Answer with:  bramble answer <letter>
+"""
+hint = "What did the operator do at the moment of settlement?"
+success = "Right. Instant AND final: great for receivers, so senders (and their banks) have to be careful."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • Banks settle with each other through an operator, by moving reserves on its books.
+  • RTP settles each payment on its own (GROSS), immediately, and it's FINAL.
+  • Three sets of books changed for one payment: mine, fern's, and the operator's.
+  • An idempotency key makes a retry safe even across banks.
+
+Real-world: The Clearing House's RTP network has run since 2017 and takes payments up to
+$10 million; it carries ISO 20022 messages, which is what our little JSON stands in for.
+"""
+
+[[review]]
+id = "rtp-whose-books"
+prompt = """
+An RTP payment goes from a customer at pet-a to a customer at pet-b. Whose books change?
+
+  a) Only pet-a's and pet-b's
+  b) pet-a's, pet-b's, and the operator's
+  c) Only the operator's
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }
+
+[[review]]
+id = "rtp-timeout"
+prompt = """
+Your RTP request timed out: no answer. What's the safe next move?
+
+  a) Send it again with a new Idempotency-Key
+  b) Send it again with the same Idempotency-Key
+  c) Assume it failed and tell the customer
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

@@ -1,0 +1,160 @@
+id = "batch-payments"
+title = "Batch payments (ACH)"
+concept = "batch-payments"
+
+[[sources]]
+title = "Nacha: What is ACH?"
+url = "https://www.nacha.org/content/what-is-ach"
+
+[[sources]]
+title = "Federal Reserve Financial Services: FedACH Services"
+url = "https://www.frbservices.org/financial-services/ach"
+
+[[setup.entries]]
+key = "payday"
+memo = "Paycheck (direct deposit)"
+debit = "reserves"
+credit = "customer:you"
+amount_minor = 20000
+
+[[steps]]
+kind = "explain"
+text = """
+Instant payments are great, but most bank-to-bank money in the US still moves through
+ACH: the Automated Clearing House. Payroll, bills, rent.
+
+ACH works in BATCHES. Banks collect payments into FILES, send them to the operator, and
+the operator settles them all together at set times. The real ACH Network settles four
+times a business day; here, settlement happens when someone rings the bell with
+bramble ach cutoff.
+
+(Payday again: $200.00 just arrived.)
+"""
+
+[[steps]]
+kind = "task"
+id = "queue-ach"
+prompt = '''
+Pay Alex at moss (pet-c) $40.00 by ACH. Same shape as an RTP payment, different endpoint:
+
+  POST localhost:8080/api/ach/payments   (with an Idempotency-Key header)
+'''
+hint = "Copy your RTP curl, change the path to /api/ach/payments, to_bank to pet-c, amount to 4000, and use a new key."
+worked_example = '''
+curl -s -X POST localhost:8080/api/ach/payments \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: rent-share-1' \
+  -d '{"from_account": "customer:you", "to_bank": "pet-c", "to_account": "customer:alex",
+       "amount_minor": 4000, "memo": "Rent share"}'
+
+"status": "queued": your account is debited now, but no money has left my bank yet.
+'''
+success = "Queued. You've been debited $40.00, but look where the money went: clearing:ach-out, not the operator."
+check = { type = "entry_exists", postings = [
+    { account = "customer:you", amount_minor = 4000 },
+    { account = "clearing:ach-out", amount_minor = -4000 },
+] }
+
+[[steps]]
+kind = "task"
+id = "reserves-unchanged"
+prompt = """
+Check my reserves at the operator again, with SQL like last time. Did they move?
+
+  sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db
+"""
+hint = """sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'reserves:operator';\""""
+success = "Unchanged. With ACH, I owe the network the $40 (that's clearing:ach-out) until the window settles."
+check = { type = "ledger_balance", account = "reserves:operator", command = '^sqlite3\b' }
+
+[[steps]]
+kind = "task"
+id = "see-file"
+prompt = """
+Here's the file I'll send at the next cutoff, in the real Nacha format: 94-character
+lines, one record per line.
+
+  bramble ach pending
+
+The first character of each line is the record type.
+"""
+hint = "Run: bramble ach pending"
+success = "1 = file header, 5 = batch header, 6 = one payment, 8 = batch totals, 9 = file totals."
+check = { type = "command_ran", pattern = '^bramble\s+ach\s+pending\b' }
+
+[[steps]]
+kind = "task"
+id = "record-types"
+prompt = """
+Quiz: which line in that file is your $40.00 payment to Alex?
+
+  a) The line starting with 1
+  b) The line starting with 6
+  c) The line starting with 9
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Look for 0000004000 (the amount, in cents) and alex."
+success = "Yes: the 6 record (entry detail) carries the receiving bank's routing number, the account, and the amount."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "task"
+id = "cutoff"
+prompt = """
+Ring the bell. The operator collects every bank's file, nets them, and settles:
+
+  bramble ach cutoff
+"""
+hint = "Run: bramble ach cutoff"
+success = "Settled. The operator moved my reserves once, for everything in the window."
+check = { type = "command_ran", pattern = '^bramble\s+ach\s+cutoff\b' }
+
+[[steps]]
+kind = "task"
+id = "clearing-empty"
+prompt = """
+Look at my accounts. What happened to clearing:ach-out?
+
+  bramble ledger accounts
+"""
+hint = "Run: bramble ledger accounts and find the clearing:ach-out row."
+success = "Back to zero: what I owed the network was paid out of my reserves at settlement."
+check = { type = "output_matches", pattern = '(?m)^clearing:ach-out\s+liability\s+0\s', command = '^bramble\s+ledger\s+accounts\b' }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • ACH payments are queued, written into files, and settled in batches at cutoff.
+  • Until then the money sits in a clearing account: you're debited, but no reserves moved.
+  • A Nacha file is fixed-width text: the 6 records are the payments.
+
+One more ACH twist: when I send a file, I can't check that Alex's account exists at moss.
+Real banks find out later, when the payment comes back as a RETURN (code R03 means "no
+account"). In our network, money for an unknown account waits in suspense instead.
+"""
+
+[[review]]
+id = "ach-when-moves"
+prompt = """
+You queue an ACH payment at 9am; cutoff is at 2pm. When do the banks' reserves move?
+
+  a) At 9am, when the payment is queued
+  b) At 2pm, when the window settles
+  c) Only when the receiver withdraws the money
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }
+
+[[review]]
+id = "ach-unknown-account"
+prompt = """
+Can the bank sending an ACH payment confirm the receiver's account exists before sending?
+
+  a) Yes, the operator checks every account first
+  b) No: it finds out later, when the payment is returned (e.g. R03, no account)
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

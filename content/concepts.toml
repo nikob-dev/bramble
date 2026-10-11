@@ -52,3 +52,50 @@ objectives = [
     "Verify who signed a payment file with an Ed25519 signature",
     "Explain what a hash proves and what only a signature proves",
 ]
+
+# The Rails track: how money moves between banks (M4). Needs three banks and the operator
+# running (`make play` starts them).
+
+[[concepts]]
+id = "instant-payments"
+title = "Instant payments (RTP)"
+track = "rails"
+prereqs = ["double-entry", "idempotency"]
+objectives = [
+    "Explain why banks hold reserves at an operator instead of paying each other directly",
+    "Send an instant payment to another bank and see three sets of books change",
+    "Explain what settlement finality means for the sender",
+]
+
+[[concepts]]
+id = "batch-payments"
+title = "Batch payments (ACH)"
+track = "rails"
+prereqs = ["double-entry"]
+objectives = [
+    "Queue an ACH payment and explain why reserves don't move yet",
+    "Read a Nacha file: which record carries one payment",
+    "Run a cutoff and confirm the clearing account empties",
+]
+
+[[concepts]]
+id = "netting"
+title = "Netting & settlement"
+track = "rails"
+prereqs = ["batch-payments"]
+objectives = [
+    "Compute a bank's net position from its gross flows",
+    "Find the single settlement entry behind several payments",
+    "Explain the liquidity trade-off between gross and net settlement",
+]
+
+[[concepts]]
+id = "interbank-reconciliation"
+title = "Cross-bank reconciliation"
+track = "rails"
+prereqs = ["reconciliation", "instant-payments"]
+objectives = [
+    "Reconcile the bank's reserves against the operator's statement",
+    "Find the entry behind a break between two banks' books",
+    "Fix the break with a reversing entry and prove the books agree",
+]

@@ -1,0 +1,168 @@
+id = "netting"
+title = "Netting & settlement"
+concept = "netting"
+
+[[sources]]
+title = "BIS CPMI: A glossary of terms used in payments and settlement systems"
+url = "https://www.bis.org/cpmi/publ/d00b.htm"
+
+[[sources]]
+title = "Nacha: What is ACH?"
+url = "https://www.nacha.org/content/what-is-ach"
+
+[[setup.entries]]
+key = "payday"
+memo = "Paycheck (direct deposit)"
+debit = "reserves"
+credit = "customer:you"
+amount_minor = 20000
+
+[[steps]]
+kind = "explain"
+text = """
+Why wait for a cutoff at all? Because of NETTING.
+
+Say six ACH payments happen in one window:
+
+  pet-a → pet-b  $10.00     pet-b → pet-a   $7.00     pet-c → pet-a  $20.00
+  pet-a → pet-c   $5.00     pet-b → pet-c   $3.00
+  pet-a → pet-b   $2.50
+
+Settled one by one (GROSS), that's $47.50 of reserves moving. Netted, each bank only
+settles what it received minus what it sent:
+
+  pet-a  sent $17.50, received $27.00  →  +$9.50
+  pet-b  sent $10.00, received $12.50  →  +$2.50
+  pet-c  sent $20.00, received  $8.00  →  ?
+"""
+
+[[steps]]
+kind = "task"
+id = "net-position"
+prompt = """
+Quiz: what is pet-c's net position at settlement?
+
+  a) +$12.00
+  b) −$12.00
+  c) $28.00
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Net = received − sent. And the three nets must add up to zero."
+success = "−$12.00: moss pays $12.00 in. Check: +9.50 + 2.50 − 12.00 = 0. Netting never creates money."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "task"
+id = "queue-three"
+prompt = '''
+Now make a window of your own. Queue three ACH payments to Alex at fern ($5, $7 and $9)
+in one go, with a shell loop:
+
+  for amount in 500 700 900; do
+    curl -s -X POST localhost:8080/api/ach/payments ... -H "Idempotency-Key: split-$amount" ...
+  done
+'''
+hint = "Inside the loop, use $amount in both the Idempotency-Key and the amount_minor field. Mind the quotes: use double quotes around the JSON so $amount expands."
+worked_example = '''
+for amount in 500 700 900; do
+  curl -s -X POST localhost:8080/api/ach/payments \
+    -H 'Content-Type: application/json' -H "Idempotency-Key: split-$amount" \
+    -d "{\"from_account\": \"customer:you\", \"to_bank\": \"pet-b\",
+         \"to_account\": \"customer:alex\", \"amount_minor\": $amount, \"memo\": \"Split\"}"
+  echo
+done
+'''
+success = "Three payments queued. bramble ach pending would now show three 6 records."
+check = { type = "output_matches", pattern = '(?s)"queued".*"queued".*"queued"', command = 'api/ach/payments' }
+
+[[steps]]
+kind = "task"
+id = "settle-window"
+prompt = """
+Ring the bell and read the report: how many payments, how many net movements?
+
+  bramble ach cutoff
+"""
+hint = "Run: bramble ach cutoff"
+success = "Several payments in, ONE movement per bank out."
+check = { type = "command_ran", pattern = '^bramble\s+ach\s+cutoff\b' }
+
+[[steps]]
+kind = "task"
+id = "find-settlement"
+prompt = """
+Find the settlement in my books: list the newest entries that touched reserves:operator,
+with their memos.
+
+  sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db
+
+Join postings to journal_entries, keep account_id = 'reserves:operator', newest first.
+"""
+hint = "JOIN journal_entries AS e ON e.id = p.entry_id ... ORDER BY e.id DESC LIMIT 3"
+worked_example = '''
+sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "
+  SELECT e.id, e.memo, p.amount_minor
+  FROM postings AS p JOIN journal_entries AS e ON e.id = p.entry_id
+  WHERE p.account_id = 'reserves:operator'
+  ORDER BY e.id DESC LIMIT 3;"
+
+The top row is one entry for the whole window (−2100 if only your three payments were in it).
+'''
+success = "One ACH settlement entry for three payments. That's netting in a single row."
+check = { type = "output_matches", pattern = 'ACH settlement', command = '^sqlite3\b' }
+
+[[steps]]
+kind = "task"
+id = "why-net"
+prompt = """
+Quiz: why do operators bother to net?
+
+  a) Banks need far less money on hand to settle the same payments
+  b) It hides individual payments from the operator
+  c) Nacha files are too small for gross settlement
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Compare $47.50 moving gross with $24.00 moving net in the example."
+success = "Right: netting saves LIQUIDITY. The price is waiting, and if one bank can't cover its net debit, the whole window is in trouble."
+check = { type = "quiz_answer", answer = "a" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • GROSS settlement (RTP) moves money per payment: instant and final, but every payment
+    needs reserves on hand.
+  • NET settlement (ACH) waits, then moves each bank's difference once.
+  • Net position = received − sent, and all banks' nets sum to zero.
+
+The operator checks each bank can cover its net debit before settling; real systems have
+rules for what happens when one can't.
+"""
+
+[[review]]
+id = "net-sign"
+prompt = """
+In one window, a bank sent $30.00 and received $45.00. At settlement, its reserves...
+
+  a) go up by $15.00
+  b) go down by $15.00
+  c) go up by $75.00
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "a" }
+
+[[review]]
+id = "gross-or-net"
+prompt = """
+Which pairing is right?
+
+  a) RTP settles gross; ACH settles net
+  b) RTP settles net; ACH settles gross
+  c) Both settle net
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "a" }
