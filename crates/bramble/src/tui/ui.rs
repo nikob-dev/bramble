@@ -99,7 +99,7 @@ fn draw_pet(frame: &mut Frame, area: Rect, view: &View) {
     };
 
     let blink = view.frame.is_multiple_of(24);
-    let art = art(pet.mood, blink);
+    let art = bramble_core::pet::art(pet.mood, blink);
     let mood = format!("{:?}", pet.mood).to_lowercase();
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
@@ -129,17 +129,6 @@ fn draw_pet(frame: &mut Frame, area: Rect, view: &View) {
         .wrap(Wrap { trim: false })
         .block(block);
     frame.render_widget(paragraph, area);
-}
-
-fn art(mood: Mood, blink: bool) -> [&'static str; 4] {
-    let face = match (mood, blink) {
-        (_, true) => "  (-.-) ",
-        (Mood::Happy, _) => "  (^.^) ",
-        (Mood::Curious, _) => "  (o.O) ",
-        (Mood::Bored, _) => "  (-_-) ",
-        (Mood::Sleepy, _) => "  (u.u)z",
-    };
-    ["   ,_,  ", face, "  /)_)$ ", "   \" \"  "]
 }
 
 fn mood_color(mood: Mood) -> Color {
@@ -211,7 +200,11 @@ fn draw_lesson(
         ]));
         lines.push(Line::raw(""));
     }
-    lines.extend(reflow(&lesson.text).into_iter().map(Line::raw));
+    lines.extend(
+        bramble_core::text::reflow(&lesson.text)
+            .into_iter()
+            .map(Line::raw),
+    );
     if lesson.completed && !lesson.sources.is_empty() {
         lines.push(Line::raw(""));
         for source in &lesson.sources {
@@ -233,29 +226,6 @@ fn draw_lesson(
         Paragraph::new(Line::from(footer.bold().fg(Color::Blue))),
         footer_area,
     );
-}
-
-/// Joins hard-wrapped prose into paragraphs so the widget can wrap to the panel width.
-/// Blank lines separate paragraphs; indented or bulleted lines (commands, lists) stay as-is.
-fn reflow(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut joinable = false;
-    for line in text.trim().lines() {
-        let verbatim = line.starts_with(' ') || line.starts_with('\t') || line.starts_with('•');
-        if line.trim().is_empty() {
-            out.push(String::new());
-            joinable = false;
-        } else if joinable && !verbatim {
-            if let Some(last) = out.last_mut() {
-                last.push(' ');
-                last.push_str(line.trim());
-            }
-        } else {
-            out.push(line.to_owned());
-            joinable = !verbatim;
-        }
-    }
-    out
 }
 
 fn draw_mastery(frame: &mut Frame, area: Rect, mastery: &[ConceptView]) {
@@ -304,26 +274,4 @@ fn draw_lab(frame: &mut Frame, area: Rect, view: &View) {
         );
     }
     frame.render_widget(PseudoTerminal::new(view.screen).block(block), area);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ui_reflow_joins_prose_and_keeps_indented_lines() {
-        let text =
-            "Amounts are integers,\nnever floats.\n\nRun:\n  bramble next\n  • a bullet\nAfter.";
-        assert_eq!(
-            reflow(text),
-            vec![
-                "Amounts are integers, never floats.",
-                "",
-                "Run:",
-                "  bramble next",
-                "  • a bullet",
-                "After."
-            ]
-        );
-    }
 }

@@ -178,13 +178,6 @@ fn ledger_accounts_and_postings_report_posted_rows() {
 }
 
 #[test]
-fn format_minor_renders_sign_and_cents() {
-    assert_eq!(format_minor(-7_150), "-$71.50");
-    assert_eq!(format_minor(5), "$0.05");
-    assert_eq!(format_minor(0), "$0.00");
-}
-
-#[test]
 fn ledger_max_entry_id_and_key_lookup() {
     let mut ledger = bank();
     assert_eq!(ledger.max_entry_id().expect("max"), 0);
@@ -235,4 +228,22 @@ fn ledger_find_entry_since_matches_exact_postings_after_watermark() {
         None,
         "all legs must match"
     );
+}
+
+#[test]
+fn ledger_recent_entries_groups_postings_newest_first() {
+    let mut ledger = bank();
+    for amount in [100, 200, 300] {
+        ledger.post(&deposit(amount, None)).expect("post");
+    }
+    let recent = ledger.recent_entries(2).expect("recent");
+    assert_eq!(recent.len(), 2);
+    assert_eq!(
+        recent[0].postings,
+        vec![
+            Posting::new("reserves", 300),
+            Posting::new("customer:you", -300)
+        ]
+    );
+    assert_eq!(recent[1].postings[0].amount_minor, 200);
 }

@@ -1,34 +1,5 @@
 use super::*;
-use crate::node::{load_content, seed::seed};
-use ed25519_dalek::SigningKey;
-
-fn content_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content")
-}
-
-fn world_with(store: PetStore, ledger: Ledger) -> World {
-    let (curriculum, lessons) = load_content(&content_dir()).expect("content");
-    let key = SigningKey::from_bytes(&[1u8; 32]);
-    let published = Published::build(&lessons, &key, String::new());
-    World::load(
-        WorldParts {
-            pet_name: "pip".into(),
-            curriculum,
-            lessons,
-            ledger,
-            published,
-            store,
-        },
-        0,
-    )
-    .expect("world")
-}
-
-fn world() -> World {
-    let mut ledger = Ledger::open_in_memory().expect("ledger");
-    seed(&mut ledger).expect("seed");
-    world_with(PetStore::open_in_memory().expect("store"), ledger)
-}
+use crate::node::test_support::{world, world_with};
 
 fn run(world: &mut World, cmd: &str, exit_code: i32, output: &str) -> Option<ServerMsg> {
     world

@@ -9,6 +9,7 @@ pub struct Config {
     pub bind: String,
     pub node_url: String,
     pub lab_dir: PathBuf,
+    pub web_dir: PathBuf,
 }
 
 impl Config {
@@ -23,6 +24,7 @@ impl Config {
             bind: var("BRAMBLE_BIND", "0.0.0.0:8080"),
             node_url: var("BRAMBLE_NODE_URL", "ws://127.0.0.1:8080/ws"),
             lab_dir: var("BRAMBLE_LAB_DIR", &format!("{home}/lab")).into(),
+            web_dir: var("BRAMBLE_WEB_DIR", "./crates/bramble-web/dist").into(),
         }
     }
 

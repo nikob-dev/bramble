@@ -6,6 +6,8 @@ mod published;
 mod seed;
 mod server;
 mod store;
+#[cfg(test)]
+mod test_support;
 mod world;
 
 use std::path::Path;
@@ -68,7 +70,7 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         tokio::spawn(tick_loop(shared.clone()));
-        server::serve(&config.bind, shared).await
+        server::serve(&config.bind, shared, &config.web_dir).await
     })
 }
 

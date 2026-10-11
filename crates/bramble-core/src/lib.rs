@@ -5,9 +5,11 @@
 pub mod curriculum;
 pub mod lesson;
 pub mod mastery;
+pub mod money;
 pub mod pet;
 pub mod protocol;
 pub mod session;
 pub mod teacher;
+pub mod text;
 
 pub const PROTOCOL_VERSION: u16 = 1;
