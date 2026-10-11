@@ -11,7 +11,7 @@ Pets are self-learning teachers. They read payment-industry sources, propose wha
 
 ## Quick start
 ```sh
-make play     # build, start your pet's bank node, and open the TUI
+make play     # start your pet's bank node (building it the first time) and open the TUI
 ```
 The top half shows your pet and the current lesson. The bottom half is a real bash shell, the **lab**.
 Everything you do happens there:
@@ -48,6 +48,8 @@ make test     # unit + integration tests in the dev container
 make lint     # rustfmt + clippy (-D warnings)
 make e2e      # plays the whole track through the real TUI in an isolated compose project
               # (PYTHON=/path/to/python3 to pick an interpreter)
+make up       # rebuild and restart after code changes
+make reset    # wipe your pet back to lesson 1
 make logs     # structured JSON logs from the node
 ```
 

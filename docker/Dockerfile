@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 ARG RUST_IMAGE=rust:1.99.0-slim-bookworm
 ARG RUNTIME_IMAGE=debian:12.15-slim
 
