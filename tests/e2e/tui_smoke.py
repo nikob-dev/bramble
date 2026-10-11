@@ -137,8 +137,11 @@ class Terminal:
                 except OSError:
                     return
 
+    def write(self, data):
+        os.write(self.fd, data)
+
     def type(self, command):
-        os.write(self.fd, command.encode() + b"\r")
+        self.write(command.encode() + b"\r")
         self.drain(1.2)
 
     def close(self):
