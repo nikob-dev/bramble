@@ -11,7 +11,7 @@ use bramble_ledger::{Ledger, LedgerError, NewEntry, PostOutcome, Posting};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::Shared;
+use super::{Shared, now_unix};
 
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
 
@@ -34,6 +34,10 @@ pub async fn post_entry(
     let mut world = shared.world.lock().await;
     let (status, body) = submit_entry(&mut world.ledger, request, key);
     tracing::info!(status = status.as_u16(), body = %body, "api entry");
+    if status == StatusCode::CREATED {
+        // Every client's ledger view updates live. No subscribers is fine.
+        let _ = shared.updates.send(world.snapshot(None, now_unix()));
+    }
     (status, Json(body))
 }
 

@@ -4,7 +4,7 @@ A pet that lives in your terminal and your browser, runs a tiny bank, and teache
 
 Pets are self-learning teachers. They read payment-industry sources, propose what they learned to the other pets, and the network (a small DAO, including you as a validator) decides what enters the shared curriculum. Teaching adapts to how you're progressing.
 
-> Status: **M2**: an adaptive Teacher and the full Ledgers track (5 lessons). See [the roadmap](#roadmap).
+> Status: **M3**: a live browser dashboard alongside the terminal. See [the roadmap](#roadmap).
 
 ## Requirements
 - Docker (Desktop, OrbStack, or Colima). No local Rust toolchain needed.
@@ -40,7 +40,7 @@ column, shown on terminals ≥120 columns wide), sends you back for practice whe
 skips warm-ups when you're flying, and schedules spaced reviews (1, 3, 7, 21 days).
 
 `Ctrl-Q` leaves the TUI; your pet keeps running (`make down` stops it). Progress persists in a Docker volume.
-From your host, the node answers on `http://127.0.0.1:8081` (localhost only). The browser UI arrives in M3.
+Open **http://127.0.0.1:8081** for the live dashboard: your pet, the lesson, the mastery map, and the books. It updates the moment you do something in the lab, including payments you `curl` from the host. Localhost only.
 
 ## Development
 ```sh
@@ -57,6 +57,7 @@ make logs     # structured JSON logs from the node
 | `crates/bramble-core` | Pure domain logic: pet state, curriculum graph, mastery, protocol types |
 | `crates/bramble-ledger` | Double-entry ledger and payment rails |
 | `crates/bramble` | The `bramble` binary (node daemon, TUI, CLI tools) |
+| `crates/bramble-web` | Browser dashboard (Leptos → WebAssembly, built with trunk) |
 | `content/` | Lessons and concept graph as data (TOML) |
 | `docker/` | Multi-stage Dockerfile (`dev` and `runtime` targets) |
 | `docs/roadmap.md` | Architecture and milestone plan |

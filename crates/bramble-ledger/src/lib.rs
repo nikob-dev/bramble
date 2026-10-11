@@ -9,6 +9,8 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+pub use bramble_core::money::format_minor;
+
 const SCHEMA: &str = include_str!("schema.sql");
 
 pub type EntryId = i64;
@@ -117,6 +119,13 @@ pub struct PostingRow {
     pub account: String,
     pub amount_minor: i64,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryRow {
+    pub entry_id: EntryId,
+    pub memo: String,
+    pub postings: Vec<Posting>,
 }
 
 pub struct Ledger {
@@ -340,6 +349,40 @@ impl Ledger {
         Ok(current.and_then(|(id, mut legs)| matches(&mut legs).then_some(id)))
     }
 
+    /// The newest `limit` posted entries with their postings, newest first.
+    pub fn recent_entries(&self, limit: usize) -> Result<Vec<EntryRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, e.memo, p.account_id, p.amount_minor
+             FROM journal_entries AS e
+             JOIN postings AS p ON p.entry_id = e.id
+             WHERE e.id IN (
+                 SELECT id FROM journal_entries WHERE status = 'posted' ORDER BY id DESC LIMIT ?1
+             )
+             ORDER BY e.id DESC, p.id",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = stmt.query_map([limit], |row| {
+            Ok((
+                row.get::<_, EntryId>(0)?,
+                row.get::<_, String>(1)?,
+                Posting::new(row.get::<_, String>(2)?, row.get::<_, i64>(3)?),
+            ))
+        })?;
+        let mut entries: Vec<EntryRow> = Vec::new();
+        for row in rows {
+            let (entry_id, memo, posting) = row?;
+            match entries.last_mut() {
+                Some(last) if last.entry_id == entry_id => last.postings.push(posting),
+                _ => entries.push(EntryRow {
+                    entry_id,
+                    memo,
+                    postings: vec![posting],
+                }),
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn entry_count(&self) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM journal_entries WHERE status = 'posted'",
@@ -366,13 +409,6 @@ fn validate(entry: &NewEntry) -> Result<()> {
 /// What makes two requests "the same" for idempotency purposes.
 fn fingerprint(entry: &NewEntry) -> String {
     serde_json::json!({ "memo": entry.memo, "postings": entry.postings }).to_string()
-}
-
-/// Formats minor units as a currency string, e.g. `-7150` → `-$71.50`.
-pub fn format_minor(amount_minor: i64) -> String {
-    let sign = if amount_minor < 0 { "-" } else { "" };
-    let abs = amount_minor.unsigned_abs();
-    format!("{sign}${}.{:02}", abs / 100, abs % 100)
 }
 
 #[cfg(test)]

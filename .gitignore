@@ -5,3 +5,5 @@
 *.db-wal
 *.db-shm
 .DS_Store
+/crates/bramble-web/dist/
+__pycache__/

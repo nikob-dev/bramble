@@ -4,7 +4,9 @@ use bramble_core::curriculum::Curriculum;
 use bramble_core::lesson::{Lesson, PostingSpec, setup_entry_key};
 use bramble_core::mastery::MasteryMap;
 use bramble_core::pet::{Pet, PetEvent};
-use bramble_core::protocol::{ActivityView, ConceptView, LessonView, PetView, ServerMsg};
+use bramble_core::protocol::{
+    AccountView, ActivityView, ConceptView, EntryView, LedgerView, LessonView, PetView, ServerMsg,
+};
 use bramble_core::session::{self, Facts, LessonProgress, Observation, Outcome};
 use bramble_core::teacher::{self, ActivityKind, ActivityPlan, ActivitySummary};
 use bramble_ledger::{Ledger, NewEntry, Posting};
@@ -17,6 +19,7 @@ const PROGRESS_DOC: &str = "lesson_progress";
 const MASTERY_DOC: &str = "mastery";
 const PLAN_DOC: &str = "activity_plan";
 const SUMMARY_DOC: &str = "last_summary";
+const RECENT_ENTRIES: usize = 8;
 
 pub struct World {
     pub pet: Pet,
@@ -178,7 +181,45 @@ impl World {
             say,
             mastery: ConceptView::build_all(&self.curriculum, &self.mastery, now_unix),
             activity: Some(ActivityView::from(&self.plan)),
+            ledger: self.ledger_view(),
         }
+    }
+
+    fn ledger_view(&self) -> Option<LedgerView> {
+        let read = || -> bramble_ledger::Result<LedgerView> {
+            Ok(LedgerView {
+                accounts: self
+                    .ledger
+                    .accounts()?
+                    .into_iter()
+                    .map(|a| AccountView {
+                        account: a.account,
+                        kind: a.kind.as_str().to_owned(),
+                        balance_minor: a.balance_minor,
+                    })
+                    .collect(),
+                recent_entries: self
+                    .ledger
+                    .recent_entries(RECENT_ENTRIES)?
+                    .into_iter()
+                    .map(|e| EntryView {
+                        entry_id: e.entry_id,
+                        memo: e.memo,
+                        postings: e
+                            .postings
+                            .into_iter()
+                            .map(|p| PostingSpec {
+                                account: p.account,
+                                amount_minor: p.amount_minor,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+        };
+        read()
+            .inspect_err(|error| tracing::error!(%error, "reading ledger for snapshot"))
+            .ok()
     }
 
     /// Advances the clock. Returns what the pet says if anything visible changed.

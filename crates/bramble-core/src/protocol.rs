@@ -21,7 +21,31 @@ pub enum ServerMsg {
         mastery: Vec<ConceptView>,
         #[serde(default)]
         activity: Option<ActivityView>,
+        #[serde(default)]
+        ledger: Option<LedgerView>,
     },
+}
+
+/// The pet-bank's books, for clients that display them (the TUI ignores this).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LedgerView {
+    pub accounts: Vec<AccountView>,
+    /// Newest first.
+    pub recent_entries: Vec<EntryView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountView {
+    pub account: String,
+    pub kind: String,
+    pub balance_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryView {
+    pub entry_id: i64,
+    pub memo: String,
+    pub postings: Vec<crate::lesson::PostingSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +67,8 @@ impl From<&ActivityPlan> for ActivityView {
 pub struct ConceptView {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub prereqs: Vec<String>,
     pub p_known: f32,
     pub status: ConceptStatus,
     pub review_due: bool,
@@ -79,6 +105,7 @@ impl ConceptView {
                 Self {
                     id: concept.id.clone(),
                     title: concept.title.clone(),
+                    prereqs: concept.prereqs.clone(),
                     p_known: p_known as f32,
                     status,
                     review_due: mastery.review_due(&concept.id, now_unix),

@@ -121,6 +121,18 @@ impl Pet {
     }
 }
 
+/// The pet's ASCII body, shared by every client so the pet looks the same everywhere.
+pub fn art(mood: Mood, blink: bool) -> [&'static str; 4] {
+    let face = match (mood, blink) {
+        (_, true) => "  (-.-) ",
+        (Mood::Happy, _) => "  (^.^) ",
+        (Mood::Curious, _) => "  (o.O) ",
+        (Mood::Bored, _) => "  (-_-) ",
+        (Mood::Sleepy, _) => "  (u.u)z",
+    };
+    ["   ,_,  ", face, "  /)_)$ ", "   \" \"  "]
+}
+
 fn clamp(value: f32) -> f32 {
     value.clamp(0.0, MAX_STAT)
 }
