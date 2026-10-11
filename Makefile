@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: test lint build up start play logs down reset e2e e2e-smoke e2e-lab clean-docker
+.PHONY: test lint build up start play network peers logs down reset e2e e2e-smoke e2e-lab clean-docker
 
 test:
 	docker compose run --rm dev cargo test --workspace
@@ -22,6 +22,19 @@ start:
 play: start
 	docker compose exec -it -u learner pet-a bramble tui
 
+# All four nodes: your bank, two counterparty banks, and the operator (decision 015).
+NODES = pet-a pet-b pet-c operator
+network:
+	docker compose up --build --wait -d $(NODES)
+
+# Which peers each node has discovered (the peer port is only reachable inside compose).
+peers:
+	@for node in $(NODES); do \
+		printf '%-9s ' $$node; \
+		docker compose exec -T $$node curl -fsS localhost:9090/net/peers || echo "(not running)"; \
+		echo; \
+	done
+
 logs:
 	docker compose logs -f pet-a
 
@@ -35,10 +48,10 @@ clean-docker:
 	docker image prune -f
 	docker system df
 
-# Wipe your pet's bank and progress back to lesson 1.
+# Wipe every node's bank and progress (your pet back to lesson 1). Keeps the cargo cache.
 reset:
 	docker compose down
-	docker volume rm bramble_pet-a-data
+	docker volume rm $$(docker volume ls -q --filter name=bramble_pet- --filter name=bramble_operator-)
 
 # Isolated project + port so the e2e tests never touch your pet's data.
 # Each script gets a fresh pet: the lab checks need lesson 1 from the start.

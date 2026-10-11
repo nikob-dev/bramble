@@ -1,3 +1,21 @@
+# Every node (bank or operator) runs the same image. Peers talk on :9090 over the compose
+# network only; that port is never published to the host (decision 011).
+x-node: &node
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: runtime
+  image: bramble:dev
+  command: ["node"]
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+    interval: 5s
+    timeout: 2s
+    retries: 10
+  env_file:
+    - path: .env
+      required: false
+
 services:
   dev:
     build:
@@ -11,30 +29,58 @@ services:
       - cargo-target:/app/target
     profiles: ["dev"]
 
+  # Your bank: `make play` attaches here (decision 015).
   pet-a:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-      target: runtime
-    image: bramble:dev
-    command: ["node"]
+    <<: *node
     environment:
       BRAMBLE_PET_NAME: pip
+      BRAMBLE_NODE_ID: pet-a
+      BRAMBLE_PEERS: pet-b:9090,pet-c:9090,operator:9090
     ports:
       # Localhost only: the payments API accepts writes.
       - "127.0.0.1:${BRAMBLE_PET_A_PORT:-8081}:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
-      interval: 5s
-      timeout: 2s
-      retries: 10
-    env_file:
-      - path: .env
-        required: false
     volumes:
       - pet-a-data:/var/lib/bramble
+
+  # Counterparty banks. Started by `make network`, not by `make play`.
+  pet-b:
+    <<: *node
+    environment:
+      BRAMBLE_PET_NAME: fern
+      BRAMBLE_NODE_ID: pet-b
+      BRAMBLE_PEERS: pet-a:9090,pet-c:9090,operator:9090
+    ports:
+      - "127.0.0.1:${BRAMBLE_PET_B_PORT:-8082}:8080"
+    volumes:
+      - pet-b-data:/var/lib/bramble
+
+  pet-c:
+    <<: *node
+    environment:
+      BRAMBLE_PET_NAME: moss
+      BRAMBLE_NODE_ID: pet-c
+      BRAMBLE_PEERS: pet-a:9090,pet-b:9090,operator:9090
+    ports:
+      - "127.0.0.1:${BRAMBLE_PET_C_PORT:-8083}:8080"
+    volumes:
+      - pet-c-data:/var/lib/bramble
+
+  # The clearing house / central bank that settles between the banks (decision 012).
+  operator:
+    <<: *node
+    environment:
+      BRAMBLE_PET_NAME: operator
+      BRAMBLE_NODE_ID: operator
+      BRAMBLE_PEERS: pet-a:9090,pet-b:9090,pet-c:9090
+    ports:
+      - "127.0.0.1:${BRAMBLE_OPERATOR_PORT:-8090}:8080"
+    volumes:
+      - operator-data:/var/lib/bramble
 
 volumes:
   cargo-registry:
   cargo-target:
   pet-a-data:
+  pet-b-data:
+  pet-c-data:
+  operator-data:

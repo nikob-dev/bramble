@@ -161,6 +161,19 @@ impl Net {
         }
     }
 
+    /// Ids of the peers discovered so far, sorted.
+    pub fn peer_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self
+            .peers
+            .lock()
+            .expect("peers lock")
+            .keys()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
+    }
+
     /// Authenticates an envelope and, if it's new, hands its message to the inbox.
     pub fn receive(&self, envelope: &Envelope, now_unix: i64) -> Receipt {
         let verdict = self
@@ -272,6 +285,7 @@ pub async fn discover_peers(net: Arc<Net>, addrs: Vec<String>) {
 pub fn router(net: Arc<Net>) -> Router {
     Router::new()
         .route("/net/identity", get(identity))
+        .route("/net/peers", get(peers))
         .route("/net/envelope", post(envelope))
         .with_state(net)
 }
@@ -296,6 +310,10 @@ pub async fn serve_local(net: Arc<Net>) -> std::net::SocketAddr {
 
 async fn identity(State(net): State<Arc<Net>>) -> Json<Identity> {
     Json(net.identity())
+}
+
+async fn peers(State(net): State<Arc<Net>>) -> Json<Vec<String>> {
+    Json(net.peer_ids())
 }
 
 async fn envelope(
@@ -354,6 +372,7 @@ mod tests {
         let b_addr = serve_local(b.clone()).await;
         assert_eq!(a.discover(&b_addr.to_string()).await.expect("a→b"), "pet-b");
         assert_eq!(b.discover(&a_addr.to_string()).await.expect("b→a"), "pet-a");
+        assert_eq!(a.peer_ids(), ["pet-b"]);
         (a, b)
     }
 
