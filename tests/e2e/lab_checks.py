@@ -91,6 +91,18 @@ def wait_healthy(seconds=30):
     sys.exit(f"node not healthy {seconds}s after restart")
 
 
+def node_logs():
+    out = subprocess.run(["docker", "compose", "-p", PROJECT, "logs", "--no-color", "pet-a"],
+                         capture_output=True, text=True, check=True)
+    return out.stdout.splitlines()
+
+
+def learner(*command):
+    """Runs a command in pet-a's container the way the lab's learner would."""
+    return subprocess.run(["docker", "compose", "-p", PROJECT, "exec", "-T", "-u", "learner", "pet-a", *command],
+                          capture_output=True, text=True)
+
+
 def lan_ip():
     """The host's outward-facing address, or None (e.g. on CI runners without one)."""
     try:
@@ -129,6 +141,13 @@ def main():
         term.type("is it a store of value")
         check("prose without quotes gets the pet's 'this is a shell' hint",
               drew(term, "looks like a sentence"), "hint not drawn")
+
+        # 9: a command with a newline inside quotes (as pasted JSON or a loop body has)
+        # must reach the node whole, not cut at the first line.
+        keys(term, (PASTE_START + 'echo "lab-multiline-first\nlab-multiline-second"' + PASTE_END + "\r").encode(), 1.5)
+        observed = [line for line in node_logs() if "lab observation" in line and "lab-multiline-first" in line]
+        check("multi-line commands reach the node whole",
+              any("lab-multiline-second" in line for line in observed), f"logged: {observed}")
 
         # 4 + 5: full-screen programs and resizing must not break command observation.
         s = advance_to(term, "money-is-rows", "list-postings")
@@ -188,6 +207,15 @@ def main():
     check("progress and mastery survive a restart",
           (step(after), after["mastery"]) == (step(before), before["mastery"]),
           f"{step(before)} → {step(after)}")
+
+    # 10: the Rails CLI as a learner runs it, with no operator on this network.
+    pending = learner("bramble", "ach", "pending")
+    check("`bramble ach pending` with nothing queued says so and succeeds",
+          pending.returncode == 0 and "No ACH payments" in pending.stderr, pending.stderr)
+    for command in (["bramble", "reconcile"], ["bramble", "ach", "cutoff"]):
+        result = learner(*command)
+        check(f"`{' '.join(command)}` without an operator fails clearly",
+              result.returncode != 0 and "operator:8080" in result.stderr, result.stderr[-300:])
 
     # 7: the API answers on loopback only.
     port = urllib.parse.urlparse(URL).port
