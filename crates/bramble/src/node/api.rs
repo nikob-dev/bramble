@@ -11,6 +11,7 @@ use bramble_ledger::{Ledger, LedgerError, NewEntry, PostOutcome, Posting};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::rtp::{PaymentRequest, SendOutcome, send_payment};
 use super::{Shared, now_unix};
 
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -38,6 +39,48 @@ pub async fn post_entry(
         // Every client's ledger view updates live. No subscribers is fine.
         let _ = shared.updates.send(world.snapshot(None, now_unix()));
     }
+    (status, Json(body))
+}
+
+/// `POST /api/rtp/payments`: an instant payment to a customer at another bank.
+/// 201 settled, 200 replay (same `Idempotency-Key`), 422 refused, 504 no answer in time.
+pub async fn post_rtp_payment(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(request): Json<PaymentRequest>,
+) -> (StatusCode, Json<Value>) {
+    let key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let outcome = send_payment(&shared, request, key).await;
+    let (status, body) = match outcome {
+        SendOutcome::Settled { msg_id, entry_id } => (
+            StatusCode::CREATED,
+            json!({ "status": "settled", "msg_id": msg_id, "entry_id": entry_id }),
+        ),
+        SendOutcome::Replayed { msg_id, entry_id } => (
+            StatusCode::OK,
+            json!({ "status": "settled", "msg_id": msg_id, "entry_id": entry_id, "replayed": true }),
+        ),
+        SendOutcome::Invalid(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "refused", "error": error }),
+        ),
+        SendOutcome::Rejected { msg_id, reason } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "rejected", "msg_id": msg_id, "error": reason }),
+        ),
+        SendOutcome::TimedOut { msg_id } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            json!({
+                "status": "unknown",
+                "msg_id": msg_id,
+                "error": "no answer in time; retry with the same Idempotency-Key to find out"
+            }),
+        ),
+    };
+    tracing::info!(status = status.as_u16(), body = %body, "api rtp payment");
     (status, Json(body))
 }
 

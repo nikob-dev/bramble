@@ -27,6 +27,7 @@ pub fn router(shared: Arc<Shared>, web_dir: &Path) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/state", get(state))
         .route("/api/entries", post(api::post_entry))
+        .route("/api/rtp/payments", post(api::post_rtp_payment))
         .route("/api/statements/card-network", get(api::statement))
         .route("/api/files/{name}", get(api::file))
         .route("/api/keys/node.pem", get(api::public_key))
@@ -137,17 +138,13 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     use super::*;
-    use crate::node::test_support::world;
+    use crate::node::test_support::{shared, world};
 
     /// The M3 definition of done: every client sees a change within a second.
     const SYNC_DEADLINE: Duration = Duration::from_secs(1);
 
     async fn start(web_dir: &Path) -> std::net::SocketAddr {
-        let (updates, _) = broadcast::channel(64);
-        let shared = Arc::new(Shared {
-            world: tokio::sync::Mutex::new(world()),
-            updates,
-        });
+        let shared = shared("pet-a", 1, world());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");

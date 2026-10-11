@@ -3,7 +3,9 @@
 mod api;
 mod identity;
 mod net;
+mod operator;
 mod published;
+mod rtp;
 mod seed;
 mod server;
 mod store;
@@ -21,7 +23,7 @@ use bramble_core::lesson::Lesson;
 use bramble_ledger::Ledger;
 use tokio::sync::{Mutex, broadcast};
 
-use crate::config::Config;
+use crate::config::{Config, Role};
 use published::Published;
 use store::PetStore;
 use world::{World, WorldParts};
@@ -31,6 +33,9 @@ const TICK_INTERVAL: Duration = Duration::from_secs(10);
 pub struct Shared {
     pub world: Mutex<World>,
     pub updates: broadcast::Sender<bramble_core::protocol::ServerMsg>,
+    pub net: Arc<net::Net>,
+    pub rtp: rtp::RtpDesk,
+    pub operator_id: String,
 }
 
 pub fn run(config: Config) -> anyhow::Result<()> {
@@ -40,6 +45,9 @@ pub fn run(config: Config) -> anyhow::Result<()> {
         )
         .json()
         .init();
+    if config.role == Role::Operator {
+        return operator::run(config);
+    }
 
     std::fs::create_dir_all(&config.data_dir)
         .with_context(|| format!("creating data dir {}", config.data_dir.display()))?;
@@ -73,11 +81,15 @@ pub fn run(config: Config) -> anyhow::Result<()> {
     let shared = Arc::new(Shared {
         world: Mutex::new(world),
         updates,
+        net: net.clone(),
+        rtp: rtp::RtpDesk::default(),
+        operator_id: config.operator_id.clone(),
     });
 
     tokio::runtime::Runtime::new()?.block_on(async move {
         tokio::spawn(tick_loop(shared.clone()));
         tokio::spawn(net::discover_peers(net.clone(), config.peers.clone()));
+        tokio::spawn(rtp::bank_dispatch(shared.clone()));
         tokio::try_join!(
             server::serve(&config.bind, shared, &config.web_dir),
             net::serve(&config.net_bind, net),

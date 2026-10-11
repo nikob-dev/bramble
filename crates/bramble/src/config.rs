@@ -16,6 +16,18 @@ pub struct Config {
     pub net_bind: String,
     /// Peer addresses (`host:port`), e.g. `pet-b:9090,pet-c:9090`.
     pub peers: Vec<String>,
+    pub role: Role,
+    /// The node id of the operator that settles between banks (decision 012).
+    pub operator_id: String,
+    /// Operator only: the banks it holds reserves for.
+    pub banks: Vec<String>,
+}
+
+/// A node is either a pet-bank or the operator that settles between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Bank,
+    Operator,
 }
 
 impl Config {
@@ -33,7 +45,14 @@ impl Config {
             web_dir: var("BRAMBLE_WEB_DIR", "./crates/bramble-web/dist").into(),
             node_id: var("BRAMBLE_NODE_ID", "pet-a"),
             net_bind: var("BRAMBLE_NET_BIND", "0.0.0.0:9090"),
-            peers: parse_peers(&var("BRAMBLE_PEERS", "")),
+            peers: parse_list(&var("BRAMBLE_PEERS", "")),
+            role: match var("BRAMBLE_ROLE", "bank").as_str() {
+                "bank" => Role::Bank,
+                "operator" => Role::Operator,
+                other => panic!("BRAMBLE_ROLE must be \"bank\" or \"operator\", got {other:?}"),
+            },
+            operator_id: var("BRAMBLE_OPERATOR_ID", "operator"),
+            banks: parse_list(&var("BRAMBLE_BANKS", "")),
         }
     }
 
@@ -46,7 +65,7 @@ impl Config {
     }
 }
 
-fn parse_peers(list: &str) -> Vec<String> {
+fn parse_list(list: &str) -> Vec<String> {
     list.split(',')
         .map(str::trim)
         .filter(|peer| !peer.is_empty())
@@ -59,11 +78,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_parse_peers_ignores_blanks_and_spaces() {
+    fn config_parse_list_ignores_blanks_and_spaces() {
         assert_eq!(
-            parse_peers(" pet-b:9090, ,pet-c:9090,"),
+            parse_list(" pet-b:9090, ,pet-c:9090,"),
             ["pet-b:9090", "pet-c:9090"]
         );
-        assert!(parse_peers("").is_empty());
+        assert!(parse_list("").is_empty());
     }
 }

@@ -69,8 +69,9 @@ services:
   operator:
     <<: *node
     environment:
-      BRAMBLE_PET_NAME: operator
+      BRAMBLE_ROLE: operator
       BRAMBLE_NODE_ID: operator
+      BRAMBLE_BANKS: pet-a,pet-b,pet-c
       BRAMBLE_PEERS: pet-a:9090,pet-b:9090,pet-c:9090
     ports:
       - "127.0.0.1:${BRAMBLE_OPERATOR_PORT:-8090}:8080"

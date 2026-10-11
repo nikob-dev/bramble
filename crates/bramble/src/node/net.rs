@@ -29,10 +29,6 @@ use super::now_unix;
 use super::store::PetStore;
 
 const PINS_DOC: &str = "peer_keys";
-#[allow(
-    dead_code,
-    reason = "first caller is the RTP flow (docs/tasks/m4.md T7)"
-)]
 const SEND_ATTEMPTS: u32 = 4;
 const DISCOVERY_RETRY: Duration = Duration::from_secs(2);
 
@@ -58,10 +54,6 @@ pub enum Receipt {
     Rejected(Rejection),
 }
 
-#[allow(
-    dead_code,
-    reason = "first caller is the RTP flow (docs/tasks/m4.md T7)"
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivery {
     Delivered,
@@ -201,19 +193,11 @@ impl Net {
 
     /// Signs `msg` once and delivers it, retrying the *same* envelope on transient
     /// failures, so the receiver sees at most one new message however many tries it takes.
-    #[allow(
-        dead_code,
-        reason = "first caller is the RTP flow (docs/tasks/m4.md T7)"
-    )]
     pub async fn send(&self, to: &str, msg: &NetMsg) -> anyhow::Result<Delivery> {
         let envelope = bramble_net::seal(msg, &self.id, &self.key, now_unix());
         self.deliver(to, &envelope).await
     }
 
-    #[allow(
-        dead_code,
-        reason = "first caller is the RTP flow (docs/tasks/m4.md T7)"
-    )]
     pub async fn deliver(&self, to: &str, envelope: &Envelope) -> anyhow::Result<Delivery> {
         let base = self
             .peers
