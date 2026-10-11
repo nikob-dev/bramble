@@ -267,6 +267,79 @@ impl Ledger {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Highest posted entry id (0 for an empty ledger): a high-water mark for "entries since".
+    pub fn max_entry_id(&self) -> Result<EntryId> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM journal_entries WHERE status = 'posted'",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn entry_id_by_idempotency_key(&self, key: &str) -> Result<Option<EntryId>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM journal_entries WHERE idempotency_key = ?1 AND status = 'posted'",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// First posted entry after `since` whose postings are exactly `postings` (order-insensitive).
+    pub fn find_entry_since(
+        &self,
+        since: EntryId,
+        postings: &[Posting],
+    ) -> Result<Option<EntryId>> {
+        let mut wanted: Vec<(&str, i64)> = postings
+            .iter()
+            .map(|p| (p.account.as_str(), p.amount_minor))
+            .collect();
+        wanted.sort_unstable();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT e.id, p.account_id, p.amount_minor
+             FROM journal_entries AS e
+             JOIN postings AS p ON p.entry_id = e.id
+             WHERE e.status = 'posted' AND e.id > ?1
+             ORDER BY e.id",
+        )?;
+        let rows = stmt.query_map([since], |row| {
+            Ok((
+                row.get::<_, EntryId>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+
+        let mut current: Option<(EntryId, Vec<(String, i64)>)> = None;
+        let matches = |legs: &mut Vec<(String, i64)>| {
+            legs.sort_unstable();
+            legs.len() == wanted.len()
+                && legs
+                    .iter()
+                    .zip(&wanted)
+                    .all(|((a, x), (b, y))| a == b && x == y)
+        };
+        for row in rows {
+            let (id, account, amount) = row?;
+            match &mut current {
+                Some((current_id, legs)) if *current_id == id => legs.push((account, amount)),
+                _ => {
+                    if let Some((done_id, mut legs)) = current.take()
+                        && matches(&mut legs)
+                    {
+                        return Ok(Some(done_id));
+                    }
+                    current = Some((id, vec![(account, amount)]));
+                }
+            }
+        }
+        Ok(current.and_then(|(id, mut legs)| matches(&mut legs).then_some(id)))
+    }
+
     pub fn entry_count(&self) -> Result<i64> {
         Ok(self.conn.query_row(
             "SELECT COUNT(*) FROM journal_entries WHERE status = 'posted'",
