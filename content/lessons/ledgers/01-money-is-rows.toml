@@ -1,0 +1,91 @@
+id = "money-is-rows"
+title = "Money is rows"
+concept = "money-is-rows"
+
+[[sources]]
+title = "Bank of England — Money creation in the modern economy (Quarterly Bulletin 2014 Q1)"
+url = "https://www.bankofengland.co.uk/quarterly-bulletin/2014/q1/money-creation-in-the-modern-economy"
+
+[[steps]]
+kind = "explain"
+text = """
+Hi! I just opened a bank... but I don't actually know what money IS inside a bank.
+Will you help me find out?
+
+Here's a rumour: the money in your bank account isn't coins in a vault.
+It's rows in a database.
+
+Type `bramble next` in the lab terminal below to continue.
+"""
+
+[[steps]]
+kind = "task"
+prompt = "Ask my bank which accounts it keeps. In the lab, run:  bramble ledger accounts"
+hint = "Type exactly `bramble ledger accounts` and press Enter."
+success = "Each line is an account. Look closely: customer:you is NEGATIVE. Remember that."
+check = { type = "command_ran", pattern = '^bramble\s+ledger\s+accounts\b' }
+
+[[steps]]
+kind = "explain"
+text = """
+A balance isn't stored anywhere as a single number. It's computed from POSTINGS:
+one row for every time money moved into or out of an account.
+
+Amounts are in minor units (cents), so 7150 means $71.50. Integers, never floats,
+so no rounding errors.
+
+Debits are positive and credits are negative. Each journal entry's postings sum to zero,
+so a posting never creates or destroys money. It only moves it between accounts.
+
+`bramble next` to continue.
+"""
+
+[[steps]]
+kind = "task"
+prompt = "Look at the raw rows behind your account:  bramble ledger postings customer:you"
+hint = "Run `bramble ledger postings customer:you`."
+success = "Four rows: your paycheck, a coffee, rent, and a fee. That's your whole financial life here."
+check = { type = "command_ran", pattern = '^bramble\s+ledger\s+postings\s+customer:you\b' }
+
+[[steps]]
+kind = "task"
+prompt = """
+Now YOU be the bank. Compute the balance of customer:you yourself, with SQL,
+straight from the ledger file:
+
+  sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db
+
+Inside sqlite3, `.tables` and `.schema postings` show what's there. `.quit` exits.
+"""
+hint = """sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'customer:you';\""""
+success = "That's all a balance is: SUM() over rows. Banks cache it for speed, but the rows are the truth."
+check = { type = "ledger_balance", account = "customer:you", command = '^sqlite3\b' }
+
+[[steps]]
+kind = "task"
+prompt = """
+Quiz: why is customer:you negative?
+
+  a) You're overdrawn.
+  b) To the bank, your deposit is a liability (money it owes you), so it's recorded as a credit.
+  c) It's a bug in my bank.
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Who owes whom? When you deposit money, the bank now owes it back to you."
+success = "Exactly! Your 'balance' is the bank's DEBT to you. The matching asset sits in `reserves`."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • A bank account is a set of rows (postings), and its balance is their SUM.
+  • Amounts are integers in minor units.
+  • Your deposit is a liability on the bank's books, which is why it shows as a credit.
+
+Next up: why every entry must balance to zero (double-entry), and what happens
+when someone tries to cheat.
+
+`bramble next` to finish the lesson.
+"""
