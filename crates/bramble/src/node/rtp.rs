@@ -131,6 +131,28 @@ fn is_customer_account(ledger: &Ledger, account: &str) -> bool {
 
 // ---- paying bank ----
 
+/// What a bank checks before any payment leaves it, on any rail.
+pub fn check_outgoing(ledger: &Ledger, transfer: &Transfer) -> Result<(), String> {
+    transfer.validate().map_err(|error| error.to_string())?;
+    if !is_customer_account(ledger, &transfer.debtor_account) {
+        return Err(format!(
+            "{:?} is not a customer account at this bank",
+            transfer.debtor_account
+        ));
+    }
+    // A customer's balance is a liability (negative = we owe them), so funds are -balance.
+    // Checked before sending; concurrent sends from one account could still overdraw it.
+    let available = -ledger.balance(&transfer.debtor_account).unwrap_or(0);
+    if available < transfer.amount_minor {
+        return Err(format!(
+            "insufficient funds: {} available, {} requested",
+            bramble_ledger::format_minor(available),
+            bramble_ledger::format_minor(transfer.amount_minor)
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PaymentRequest {
     pub from_account: String,
@@ -139,6 +161,9 @@ pub struct PaymentRequest {
     pub amount_minor: i64,
     #[serde(default)]
     pub memo: String,
+    /// ACH files carry the receiver's name; defaults to the account name.
+    #[serde(default)]
+    pub receiver_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,24 +216,8 @@ pub async fn send_payment(
             Ok(None) => {}
             Err(error) => return SendOutcome::Invalid(format!("ledger error: {error}")),
         }
-        if let Err(error) = transfer.validate() {
-            return SendOutcome::Invalid(error.to_string());
-        }
-        if !is_customer_account(&world.ledger, &transfer.debtor_account) {
-            return SendOutcome::Invalid(format!(
-                "{:?} is not a customer account at this bank",
-                transfer.debtor_account
-            ));
-        }
-        // A customer's balance is a liability (negative = we owe them), so funds are -balance.
-        // Checked before sending; concurrent sends from one account could still overdraw it.
-        let available = -world.ledger.balance(&transfer.debtor_account).unwrap_or(0);
-        if available < transfer.amount_minor {
-            return SendOutcome::Invalid(format!(
-                "insufficient funds: {} available, {} requested",
-                bramble_ledger::format_minor(available),
-                bramble_ledger::format_minor(transfer.amount_minor)
-            ));
+        if let Err(error) = check_outgoing(&world.ledger, &transfer) {
+            return SendOutcome::Invalid(error);
         }
     }
 
@@ -439,6 +448,7 @@ mod tests {
             to_account: to_account.into(),
             amount_minor,
             memo: "Dinner".into(),
+            receiver_name: None,
         }
     }
 

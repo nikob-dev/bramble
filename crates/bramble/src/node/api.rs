@@ -7,11 +7,12 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use bramble_core::lesson::PostingSpec;
-use bramble_ledger::{Ledger, LedgerError, NewEntry, PostOutcome, Posting};
+use bramble_ledger::rails::{Ach, Rail, Transfer};
+use bramble_ledger::{Ledger, LedgerError, NewEntry, OutboxItem, PostOutcome, Posting, nacha};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::rtp::{PaymentRequest, SendOutcome, send_payment};
+use super::rtp::{PaymentRequest, SendOutcome, check_outgoing, send_payment};
 use super::{Shared, now_unix};
 
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -82,6 +83,123 @@ pub async fn post_rtp_payment(
     };
     tracing::info!(status = status.as_u16(), body = %body, "api rtp payment");
     (status, Json(body))
+}
+
+/// `POST /api/ach/payments`: queue a payment for the next ACH file. The customer is
+/// debited now (into `clearing:ach-out`); money moves between banks at cutoff.
+/// 201 queued, 200 replay (same `Idempotency-Key`), 409 key reused, 422 refused.
+pub async fn post_ach_payment(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(request): Json<PaymentRequest>,
+) -> (StatusCode, Json<Value>) {
+    let key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_else(bramble_net::new_nonce);
+    let transfer = Transfer {
+        debtor_bank: shared.net.id.clone(),
+        debtor_account: request.from_account.clone(),
+        creditor_bank: request.to_bank.clone(),
+        creditor_account: request.to_account.clone(),
+        amount_minor: request.amount_minor,
+    };
+    let refuse = |error: String| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "status": "refused", "error": error })),
+        )
+    };
+    if nacha::routing_number(&transfer.creditor_bank).is_none()
+        || transfer.creditor_bank == shared.operator_id
+    {
+        return refuse(format!(
+            "{:?} is not a bank on this network",
+            transfer.creditor_bank
+        ));
+    }
+
+    let mut world = shared.world.lock().await;
+    let booked_key = format!("ach:{}-{key}", shared.net.id);
+    // A retry of a payment that's already queued replays, even if funds have since dropped.
+    if world
+        .ledger
+        .entry_id_by_idempotency_key(&booked_key)
+        .ok()
+        .flatten()
+        .is_none()
+        && let Err(error) = check_outgoing(&world.ledger, &transfer)
+    {
+        return refuse(error);
+    }
+    let receiver_name = request
+        .receiver_name
+        .unwrap_or_else(|| crate::ach::file_account(&transfer.creditor_account).to_owned());
+    let entry = NewEntry {
+        memo: format!(
+            "ACH to {}/{}: {}",
+            transfer.creditor_bank, transfer.creditor_account, request.memo
+        ),
+        idempotency_key: Some(booked_key),
+        postings: Ach.debtor_postings(&transfer),
+    };
+    let item = OutboxItem {
+        originator: transfer.debtor_account.clone(),
+        receiving_bank: transfer.creditor_bank.clone(),
+        receiving_account: transfer.creditor_account.clone(),
+        receiver_name,
+        amount_minor: transfer.amount_minor,
+    };
+    let (status, body) = match world.ledger.originate_ach(&entry, &item) {
+        Ok(PostOutcome::Created(entry_id)) => {
+            let _ = shared.updates.send(world.snapshot(None, now_unix()));
+            (
+                StatusCode::CREATED,
+                json!({ "status": "queued", "entry_id": entry_id }),
+            )
+        }
+        Ok(PostOutcome::Replayed(entry_id)) => (
+            StatusCode::OK,
+            json!({ "status": "queued", "entry_id": entry_id, "replayed": true }),
+        ),
+        Err(error @ LedgerError::IdempotencyConflict(_)) => {
+            (StatusCode::CONFLICT, json!({ "error": error.to_string() }))
+        }
+        Err(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "refused", "error": error.to_string() }),
+        ),
+    };
+    tracing::info!(status = status.as_u16(), body = %body, "api ach payment");
+    (status, Json(body))
+}
+
+/// `GET /api/ach/pending`: the Nacha file the next cutoff would send (204 if empty).
+pub async fn ach_pending(State(shared): State<Arc<Shared>>) -> Response {
+    let world = shared.world.lock().await;
+    let rows = match world.ledger.pending_ach() {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "reading the ACH outbox");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if rows.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let file = crate::ach::pending_file(&shared.net.id, &shared.operator_id, &rows, now_unix());
+    match file.to_nacha() {
+        Ok(text) => (
+            [(header::CONTENT_TYPE, "text/plain; charset=us-ascii")],
+            text,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "writing the pending ACH file");
+            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
 }
 
 pub fn submit_entry(

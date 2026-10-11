@@ -28,6 +28,8 @@ pub fn router(shared: Arc<Shared>, web_dir: &Path) -> Router {
         .route("/api/state", get(state))
         .route("/api/entries", post(api::post_entry))
         .route("/api/rtp/payments", post(api::post_rtp_payment))
+        .route("/api/ach/payments", post(api::post_ach_payment))
+        .route("/api/ach/pending", get(api::ach_pending))
         .route("/api/statements/card-network", get(api::statement))
         .route("/api/files/{name}", get(api::file))
         .route("/api/keys/node.pem", get(api::public_key))
@@ -247,6 +249,60 @@ mod tests {
             .find(|a| a.account == "customer:alex")
             .expect("alex");
         assert_eq!(alex.balance_minor, -1200);
+    }
+
+    fn post_json(path: &str, key: &str, body: &str) -> String {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nIdempotency-Key: {key}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_is_queued_and_shows_in_the_pending_file() {
+        let addr = start(Path::new("/nonexistent")).await;
+        let get_pending = "GET /api/ach/pending HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+        assert!(
+            http(addr, get_pending).await.starts_with("HTTP/1.1 204"),
+            "nothing queued yet"
+        );
+
+        let body = r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":1300,"memo":"Rent share","receiver_name":"Alex Kim"}"#;
+        let first = http(addr, &post_json("/api/ach/payments", "rent-1", body)).await;
+        assert!(first.starts_with("HTTP/1.1 201"), "{first}");
+        let again = http(addr, &post_json("/api/ach/payments", "rent-1", body)).await;
+        assert!(again.starts_with("HTTP/1.1 200"), "replay: {again}");
+
+        let pending = http(addr, get_pending).await;
+        assert!(pending.starts_with("HTTP/1.1 200"), "{pending}");
+        let file = pending.split("\r\n\r\n").nth(1).expect("body");
+        let parsed = bramble_ledger::nacha::parse(file).expect("a valid Nacha file");
+        assert_eq!(parsed.entry_count(), 1, "the retry queued nothing new");
+        let entry = &parsed.batches[0].entries[0];
+        assert_eq!(
+            (entry.account.as_str(), entry.amount_minor),
+            ("alex", 1_300)
+        );
+        assert_eq!(entry.individual_name, "ALEX KIM");
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_refuses_unknown_banks_and_overdrafts() {
+        let addr = start(Path::new("/nonexistent")).await;
+        for (body, why) in [
+            (
+                r#"{"from_account":"customer:you","to_bank":"pet-z","to_account":"customer:alex","amount_minor":100}"#,
+                "not a bank",
+            ),
+            (
+                r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":99999999}"#,
+                "insufficient funds",
+            ),
+        ] {
+            let response = http(addr, &post_json("/api/ach/payments", why, body)).await;
+            assert!(response.starts_with("HTTP/1.1 422"), "{why}: {response}");
+            assert!(response.contains(why), "{response}");
+        }
     }
 
     #[tokio::test]

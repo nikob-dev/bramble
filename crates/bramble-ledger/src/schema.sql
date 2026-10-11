@@ -84,3 +84,18 @@ LEFT JOIN (
     WHERE e.status = 'posted'
 ) AS pp ON pp.account_id = a.id
 GROUP BY a.id, a.kind;
+
+-- ACH payments booked but not yet sent to the operator in a file. A transactional
+-- outbox: each row is written in the same transaction as the entry that debited the
+-- customer, so the books and the next file can never disagree.
+CREATE TABLE IF NOT EXISTS ach_outbox (
+    id                INTEGER PRIMARY KEY, -- also the entry's trace sequence in the file
+    entry_id          INTEGER NOT NULL UNIQUE REFERENCES journal_entries (id),
+    originator        TEXT NOT NULL,       -- our customer account that pays
+    receiving_bank    TEXT NOT NULL,
+    receiving_account TEXT NOT NULL,
+    receiver_name     TEXT NOT NULL,
+    amount_minor      INTEGER NOT NULL CHECK (amount_minor > 0),
+    file_id           TEXT,                -- NULL until a cutoff sends it
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+);

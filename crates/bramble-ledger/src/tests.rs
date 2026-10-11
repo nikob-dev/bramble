@@ -247,3 +247,64 @@ fn ledger_recent_entries_groups_postings_newest_first() {
     );
     assert_eq!(recent[1].postings[0].amount_minor, 200);
 }
+
+fn ach_item(amount_minor: i64) -> OutboxItem {
+    OutboxItem {
+        originator: "customer:you".into(),
+        receiving_bank: "pet-b".into(),
+        receiving_account: "customer:alex".into(),
+        receiver_name: "Alex".into(),
+        amount_minor,
+    }
+}
+
+fn ach_entry(amount: i64, key: &str) -> NewEntry {
+    NewEntry {
+        memo: "ACH to pet-b".into(),
+        idempotency_key: Some(key.into()),
+        postings: vec![
+            Posting::new("customer:you", amount),
+            Posting::new("reserves", -amount),
+        ],
+    }
+}
+
+#[test]
+fn ledger_originate_ach_books_and_queues_together() {
+    let mut ledger = bank();
+    ledger.post(&deposit(10_000, None)).expect("fund");
+    let outcome = ledger
+        .originate_ach(&ach_entry(1_300, "ach:1"), &ach_item(1_300))
+        .expect("originate");
+    let pending = ledger.pending_ach().expect("pending");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entry_id, outcome.entry_id());
+    assert_eq!(pending[0].item, ach_item(1_300));
+    assert_eq!(ledger.balance("customer:you").expect("balance"), -8_700);
+}
+
+#[test]
+fn ledger_originate_ach_replay_queues_nothing_new() {
+    let mut ledger = bank();
+    ledger.post(&deposit(10_000, None)).expect("fund");
+    let first = ledger
+        .originate_ach(&ach_entry(1_300, "ach:1"), &ach_item(1_300))
+        .expect("originate");
+    let again = ledger
+        .originate_ach(&ach_entry(1_300, "ach:1"), &ach_item(1_300))
+        .expect("replay");
+    assert_eq!(again, PostOutcome::Replayed(first.entry_id()));
+    assert_eq!(ledger.pending_ach().expect("pending").len(), 1);
+}
+
+#[test]
+fn ledger_originate_ach_failure_queues_nothing() {
+    let mut ledger = bank();
+    let mut bad = ach_entry(1_300, "ach:bad");
+    bad.postings[1] = Posting::new("no-such-account", -1_300);
+    assert!(ledger.originate_ach(&bad, &ach_item(1_300)).is_err());
+    assert!(
+        ledger.pending_ach().expect("pending").is_empty(),
+        "rolled back together"
+    );
+}
