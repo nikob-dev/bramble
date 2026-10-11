@@ -14,8 +14,6 @@ Will you help me find out?
 
 Here's a rumour: the money in your bank account isn't coins in a vault.
 It's rows in a database.
-
-Type `bramble next` in the lab terminal below to continue.
 """
 
 [[steps]]
@@ -36,8 +34,6 @@ so no rounding errors.
 
 Debits are positive and credits are negative. Each journal entry's postings sum to zero,
 so a posting never creates or destroys money. It only moves it between accounts.
-
-`bramble next` to continue.
 """
 
 [[steps]]
@@ -86,6 +82,4 @@ What we learned:
 
 Next up: why every entry must balance to zero (double-entry), and what happens
 when someone tries to cheat.
-
-`bramble next` to finish the lesson.
 """
