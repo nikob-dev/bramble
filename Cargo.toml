@@ -11,6 +11,7 @@ license = "MIT"
 [workspace.dependencies]
 bramble-core = { path = "crates/bramble-core" }
 bramble-ledger = { path = "crates/bramble-ledger" }
+bramble-net = { path = "crates/bramble-net" }
 anyhow = "1.0.104"
 axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"

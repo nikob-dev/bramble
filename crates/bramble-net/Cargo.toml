@@ -1,0 +1,17 @@
+[package]
+name = "bramble-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+bramble-core.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+thiserror.workspace = true
