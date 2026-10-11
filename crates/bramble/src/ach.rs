@@ -44,6 +44,7 @@ pub fn pending_file(bank: &str, operator: &str, rows: &[OutboxRow], now_unix: i6
         created_hhmm: hhmm(now_unix),
         file_id_modifier: 'A',
         batches: vec![Batch {
+            originating_bank: bank.to_owned(),
             company_name: format!("{bank} customers"),
             company_id: company_id(bank),
             entry_description: "PAYMENT".into(),

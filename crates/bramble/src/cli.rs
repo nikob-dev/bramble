@@ -56,6 +56,8 @@ pub fn ledger(config: &Config, command: LedgerCommand) -> anyhow::Result<()> {
 pub enum AchCommand {
     /// Print the Nacha file the next cutoff will send to the operator.
     Pending,
+    /// Ring the bell: the operator closes the window, nets every bank, and settles.
+    Cutoff,
 }
 
 pub fn ach(config: &Config, command: AchCommand) -> anyhow::Result<()> {
@@ -80,6 +82,69 @@ pub fn ach(config: &Config, command: AchCommand) -> anyhow::Result<()> {
             let file = crate::ach::pending_file(&config.node_id, &config.operator_id, &rows, now);
             print!("{}", file.to_nacha()?);
         }
+        AchCommand::Cutoff => cutoff(config)?,
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+struct CutoffReport {
+    window: u32,
+    payments: usize,
+    settled: bool,
+    positions: Vec<BankPosition>,
+}
+
+#[derive(serde::Deserialize)]
+struct BankPosition {
+    bank: String,
+    sent_minor: i64,
+    received_minor: i64,
+    net_minor: i64,
+}
+
+fn cutoff(config: &Config) -> anyhow::Result<()> {
+    let url = format!("{}/api/ach/cutoff", config.operator_url);
+    let response = tokio::runtime::Runtime::new()?.block_on(async {
+        let response = reqwest::Client::new()
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("reaching the operator at {url}"))?;
+        let status = response.status();
+        let body = response.text().await?;
+        anyhow::Ok((status, body))
+    })?;
+    let (status, body) = response;
+    if !status.is_success() {
+        anyhow::bail!("cutoff failed ({status}): {body}");
+    }
+    let report: CutoffReport = serde_json::from_str(&body).context("reading the cutoff report")?;
+    if !report.settled {
+        println!(
+            "Window {}: no ACH payments anywhere, nothing to settle.",
+            report.window
+        );
+        return Ok(());
+    }
+    println!(
+        "Window {} settled: {} payments became {} net movements.\n",
+        report.window,
+        report.payments,
+        report.positions.iter().filter(|p| p.net_minor != 0).count()
+    );
+    println!(
+        "{:<8} {:>12} {:>12} {:>12}",
+        "BANK", "SENT", "RECEIVED", "NET"
+    );
+    for p in &report.positions {
+        println!(
+            "{:<8} {:>12} {:>12} {:>12}",
+            p.bank,
+            format_minor(p.sent_minor),
+            format_minor(p.received_minor),
+            format_minor(p.net_minor)
+        );
     }
     Ok(())
 }

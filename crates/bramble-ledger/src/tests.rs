@@ -308,3 +308,33 @@ fn ledger_originate_ach_failure_queues_nothing() {
         "rolled back together"
     );
 }
+
+#[test]
+fn ledger_submit_ach_claims_pending_rows_once() {
+    let mut ledger = bank();
+    ledger.post(&deposit(10_000, None)).expect("fund");
+    for (amount, key) in [(1_000, "ach:1"), (2_000, "ach:2")] {
+        ledger
+            .originate_ach(&ach_entry(amount, key), &ach_item(amount))
+            .expect("originate");
+    }
+    let file = ledger.submit_ach("pet-a-w1").expect("submit");
+    assert_eq!(file.len(), 2);
+    assert!(ledger.pending_ach().expect("pending").is_empty());
+
+    ledger
+        .originate_ach(&ach_entry(500, "ach:3"), &ach_item(500))
+        .expect("originate after cutoff");
+    let retry = ledger.submit_ach("pet-a-w1").expect("retry");
+    assert_eq!(retry, file, "a retried window returns the same file");
+    assert_eq!(
+        ledger.pending_ach().expect("pending").len(),
+        1,
+        "the new one waits"
+    );
+    assert_eq!(ledger.ach_file_rows("pet-a-w1").expect("rows"), file);
+    assert_eq!(
+        ledger.count_entries_with_key_prefix("ach:").expect("count"),
+        3
+    );
+}

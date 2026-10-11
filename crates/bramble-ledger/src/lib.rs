@@ -221,26 +221,42 @@ impl Ledger {
 
     /// ACH payments waiting for the next cutoff, oldest first.
     pub fn pending_ach(&self) -> Result<Vec<OutboxRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, entry_id, originator, receiving_bank, receiving_account, receiver_name, amount_minor
-             FROM ach_outbox
-             WHERE file_id IS NULL
-             ORDER BY id",
+        outbox_rows(&self.conn, "file_id IS NULL", [])
+    }
+
+    /// The ACH payments that went out in one file.
+    pub fn ach_file_rows(&self, file_id: &str) -> Result<Vec<OutboxRow>> {
+        outbox_rows(&self.conn, "file_id = ?1", [file_id])
+    }
+
+    /// Puts every pending ACH payment into file `file_id` and returns that file's rows.
+    /// Idempotent: if the file was already assembled (a retried cutoff), it returns the
+    /// same rows and claims no new ones.
+    pub fn submit_ach(&mut self, file_id: &str) -> Result<Vec<OutboxRow>> {
+        let tx = self.conn.transaction()?;
+        let already: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM ach_outbox WHERE file_id = ?1)",
+            [file_id],
+            |row| row.get(0),
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(OutboxRow {
-                trace_seq: row.get(0)?,
-                entry_id: row.get(1)?,
-                item: OutboxItem {
-                    originator: row.get(2)?,
-                    receiving_bank: row.get(3)?,
-                    receiving_account: row.get(4)?,
-                    receiver_name: row.get(5)?,
-                    amount_minor: row.get(6)?,
-                },
-            })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        if !already {
+            tx.execute(
+                "UPDATE ach_outbox SET file_id = ?1 WHERE file_id IS NULL",
+                [file_id],
+            )?;
+        }
+        let rows = outbox_rows(&tx, "file_id = ?1", [file_id])?;
+        tx.commit()?;
+        Ok(rows)
+    }
+
+    /// How many entries carry an idempotency key starting with `prefix`.
+    pub fn count_entries_with_key_prefix(&self, prefix: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM journal_entries WHERE substr(idempotency_key, 1, length(?1)) = ?1",
+            [prefix],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn balance(&self, account: &str) -> Result<i64> {
@@ -412,6 +428,33 @@ impl Ledger {
             |row| row.get(0),
         )?)
     }
+}
+
+fn outbox_rows<P: rusqlite::Params>(
+    conn: &Connection,
+    filter: &str,
+    params: P,
+) -> Result<Vec<OutboxRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, entry_id, originator, receiving_bank, receiving_account, receiver_name, amount_minor
+         FROM ach_outbox
+         WHERE {filter}
+         ORDER BY id"
+    ))?;
+    let rows = stmt.query_map(params, |row| {
+        Ok(OutboxRow {
+            trace_seq: row.get(0)?,
+            entry_id: row.get(1)?,
+            item: OutboxItem {
+                originator: row.get(2)?,
+                receiving_bank: row.get(3)?,
+                receiving_account: row.get(4)?,
+                receiver_name: row.get(5)?,
+                amount_minor: row.get(6)?,
+            },
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// Posts `entry` inside the caller's transaction; the caller commits.

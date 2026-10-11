@@ -21,6 +21,10 @@ pub struct Config {
     pub operator_id: String,
     /// Operator only: the banks it holds reserves for.
     pub banks: Vec<String>,
+    /// Operator only: close an ACH window this often. Off unless set (decision 013).
+    pub ach_cutoff_secs: Option<u64>,
+    /// Where `bramble ach cutoff` reaches the operator.
+    pub operator_url: String,
 }
 
 /// A node is either a pet-bank or the operator that settles between them.
@@ -53,6 +57,12 @@ impl Config {
             },
             operator_id: var("BRAMBLE_OPERATOR_ID", "operator"),
             banks: parse_list(&var("BRAMBLE_BANKS", "")),
+            ach_cutoff_secs: std::env::var("BRAMBLE_ACH_CUTOFF_SECS").ok().map(|secs| {
+                secs.parse().unwrap_or_else(|_| {
+                    panic!("BRAMBLE_ACH_CUTOFF_SECS must be seconds, got {secs:?}")
+                })
+            }),
+            operator_url: var("BRAMBLE_OPERATOR_URL", "http://operator:8080"),
         }
     }
 

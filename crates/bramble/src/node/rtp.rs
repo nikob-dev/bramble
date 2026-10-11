@@ -43,32 +43,37 @@ impl Status {
     }
 }
 
-/// Requests awaiting an `RtpStatus` from the next hop, by `msg_id`.
-#[derive(Default)]
-pub struct Waiters(Mutex<HashMap<String, oneshot::Sender<Status>>>);
+/// Requests awaiting a reply from another node, by id (an RTP `msg_id`, an ACH file id).
+pub struct Waiters<T = Status>(Mutex<HashMap<String, oneshot::Sender<T>>>);
 
-impl Waiters {
-    pub fn register(&self, msg_id: &str) -> oneshot::Receiver<Status> {
+impl<T> Default for Waiters<T> {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+impl<T> Waiters<T> {
+    pub fn register(&self, id: &str) -> oneshot::Receiver<T> {
         let (tx, rx) = oneshot::channel();
         self.0
             .lock()
             .expect("waiters lock")
-            .insert(msg_id.to_owned(), tx);
+            .insert(id.to_owned(), tx);
         rx
     }
 
-    /// Hands a status to whoever is waiting for it. False if nobody was.
-    pub fn resolve(&self, msg_id: &str, status: Status) -> bool {
-        let waiter = self.0.lock().expect("waiters lock").remove(msg_id);
-        waiter.is_some_and(|tx| tx.send(status).is_ok())
+    /// Hands a reply to whoever is waiting for it. False if nobody was.
+    pub fn resolve(&self, id: &str, reply: T) -> bool {
+        let waiter = self.0.lock().expect("waiters lock").remove(id);
+        waiter.is_some_and(|tx| tx.send(reply).is_ok())
     }
 
-    pub async fn wait(&self, msg_id: &str, rx: oneshot::Receiver<Status>) -> Option<Status> {
-        let status = tokio::time::timeout(HOP_TIMEOUT, rx).await.ok()?.ok();
-        if status.is_none() {
-            self.0.lock().expect("waiters lock").remove(msg_id);
+    pub async fn wait(&self, id: &str, rx: oneshot::Receiver<T>) -> Option<T> {
+        let reply = tokio::time::timeout(HOP_TIMEOUT, rx).await.ok()?.ok();
+        if reply.is_none() {
+            self.0.lock().expect("waiters lock").remove(id);
         }
-        status
+        reply
     }
 }
 
@@ -264,7 +269,7 @@ pub async fn send_payment(
 
 // ---- receiving bank (and status routing for the paying bank) ----
 
-/// Handles RTP messages arriving at a bank. Runs for the node's lifetime.
+/// Handles messages from the operator (RTP and ACH). Runs for the node's lifetime.
 pub async fn bank_dispatch(shared: Arc<Shared>) {
     let mut inbox = shared.net.inbox.subscribe();
     loop {
@@ -280,7 +285,7 @@ pub async fn bank_dispatch(shared: Arc<Shared>) {
 
 async fn handle_bank_message(shared: &Shared, Inbound { from, msg }: Inbound) {
     if from != shared.operator_id {
-        tracing::warn!(%from, kind = msg.kind(), "RTP messages only come from the operator");
+        tracing::warn!(%from, kind = msg.kind(), "banks only take payment messages from the operator");
         return;
     }
     match msg {
@@ -316,7 +321,11 @@ async fn handle_bank_message(shared: &Shared, Inbound { from, msg }: Inbound) {
                 book_incoming(shared, &msg_id, &transfer, &memo).await;
             }
         }
-        _ => {}
+        NetMsg::AchCutoff { window } => super::ach_bank::on_cutoff(shared, window).await,
+        NetMsg::AchFile { contents, .. } => {
+            super::ach_bank::on_incoming_file(shared, &contents).await
+        }
+        NetMsg::SettlementNotice { .. } => super::ach_bank::on_settlement(shared, &msg).await,
     }
 }
 
@@ -389,16 +398,12 @@ impl PendingIncoming {
 #[cfg(test)]
 mod tests {
     use bramble_ledger::rails::{
-        OPENING_RESERVES, OPERATOR_ASSETS, RESERVES_AT_OPERATOR, open_operator, operator_account,
+        OPENING_RESERVES, OPERATOR_ASSETS, RESERVES_AT_OPERATOR, operator_account,
     };
     use bramble_ledger::{Ledger, Posting};
-    use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::node::net::{Net, serve_local};
-    use crate::node::operator::{self, Operator};
-    use crate::node::store::PetStore;
-    use crate::node::test_support::{shared, world};
+    use crate::node::operator::Operator;
 
     struct Network {
         a: Arc<Shared>,
@@ -406,38 +411,10 @@ mod tests {
         operator: Arc<Operator>,
     }
 
-    /// pet-a, pet-b and the operator, each serving its peer endpoint on a local port,
-    /// all discovered by each other, with their message handlers running.
     async fn network() -> Network {
-        let a = shared("pet-a", 1, world());
-        let b = shared("pet-b", 2, world());
-        let mut ledger = Ledger::open_in_memory().expect("ledger");
-        open_operator(&mut ledger, &["pet-a", "pet-b"]).expect("open");
-        let op_net = Arc::new(
-            Net::new(
-                "operator",
-                SigningKey::from_bytes(&[3; 32]),
-                PetStore::open_in_memory().expect("store"),
-            )
-            .expect("net"),
-        );
-        let operator = Operator::new(ledger, op_net.clone());
-
-        let nets = [a.net.clone(), b.net.clone(), op_net];
-        let mut addrs = Vec::new();
-        for net in &nets {
-            addrs.push(serve_local(net.clone()).await.to_string());
-        }
-        for (i, net) in nets.iter().enumerate() {
-            for (j, addr) in addrs.iter().enumerate() {
-                if i != j {
-                    net.discover(addr).await.expect("discover");
-                }
-            }
-        }
-        tokio::spawn(bank_dispatch(a.clone()));
-        tokio::spawn(bank_dispatch(b.clone()));
-        tokio::spawn(operator::dispatch(operator.clone()));
+        let (mut banks, operator) = crate::node::test_support::network(2).await;
+        let b = banks.pop().expect("pet-b");
+        let a = banks.pop().expect("pet-a");
         Network { a, b, operator }
     }
 

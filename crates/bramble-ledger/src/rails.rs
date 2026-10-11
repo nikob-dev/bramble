@@ -12,8 +12,11 @@
 //! Invariant that cross-bank reconciliation checks: for every bank,
 //! `reserves:operator` at the bank == −`bank:<id>` at the operator.
 
+use std::collections::BTreeMap;
+
 use bramble_core::net::Rail as RailKind;
 
+use crate::nacha::{AchFile, EntryKind};
 use crate::{AccountKind, Ledger, NewEntry, Posting, Result};
 
 /// The bank's balance at the operator (an asset: the operator owes it to the bank).
@@ -24,6 +27,9 @@ pub const OWNERS_CAPITAL: &str = "equity:capital";
 pub const ACH_OUTGOING: &str = "clearing:ach-out";
 /// ACH payments received but not yet settled (an asset: the network owes them to us).
 pub const ACH_INCOMING: &str = "clearing:ach-in";
+/// Money that arrived for an account we don't have: held, not lost, until someone
+/// sorts it out (real banks would return it to the sender).
+pub const ACH_SUSPENSE: &str = "suspense:ach-unapplied";
 /// What the operator holds against the balances it owes banks.
 pub const OPERATOR_ASSETS: &str = "assets:securities";
 /// Each bank starts with $10,000.00 at the operator.
@@ -141,6 +147,7 @@ pub fn open_bank(ledger: &mut Ledger) -> Result<()> {
     ledger.ensure_account(OWNERS_CAPITAL, AccountKind::Equity)?;
     ledger.ensure_account(ACH_OUTGOING, AccountKind::Liability)?;
     ledger.ensure_account(ACH_INCOMING, AccountKind::Asset)?;
+    ledger.ensure_account(ACH_SUSPENSE, AccountKind::Liability)?;
     ledger.post(&NewEntry {
         memo: "Opening reserves at the operator, funded by owners' capital".into(),
         idempotency_key: Some("opening:reserves".into()),
@@ -169,6 +176,63 @@ pub fn open_operator(ledger: &mut Ledger, banks: &[&str]) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+/// One bank's gross ACH flows in a settlement window.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub sent_minor: i64,
+    pub received_minor: i64,
+}
+
+impl Position {
+    /// Positive: the bank is owed money at settlement. Negative: it pays.
+    pub fn net_minor(&self) -> i64 {
+        self.received_minor - self.sent_minor
+    }
+}
+
+/// Gross flows per bank across a window's files. A credit entry moves money from the
+/// originating bank to the receiving bank; a debit entry pulls it the other way.
+pub fn ach_positions(files: &[AchFile]) -> BTreeMap<String, Position> {
+    let mut positions: BTreeMap<String, Position> = BTreeMap::new();
+    for batch in files.iter().flat_map(|f| &f.batches) {
+        for entry in &batch.entries {
+            let (payer, payee) = match entry.kind {
+                EntryKind::Credit => (&batch.originating_bank, &entry.receiving_bank),
+                EntryKind::Debit => (&entry.receiving_bank, &batch.originating_bank),
+            };
+            positions.entry(payer.clone()).or_default().sent_minor += entry.amount_minor;
+            positions.entry(payee.clone()).or_default().received_minor += entry.amount_minor;
+        }
+    }
+    positions
+}
+
+/// The operator's single settlement entry for a window: each bank's account moves by
+/// its *net* position, however many payments made it up. Sums to zero, because every
+/// cent one bank sent, another received.
+pub fn operator_ach_settlement(positions: &BTreeMap<String, Position>) -> Vec<Posting> {
+    positions
+        .iter()
+        .filter(|(_, p)| p.net_minor() != 0)
+        // Owing a bank more is a credit to that liability (negative).
+        .map(|(bank, p)| Posting::new(operator_account(bank), -p.net_minor()))
+        .collect()
+}
+
+/// A bank's side of the same settlement: reserves move by the net, and both clearing
+/// accounts are emptied of this window's gross amounts.
+pub fn bank_ach_settlement(position: &Position) -> Vec<Posting> {
+    [
+        (RESERVES_AT_OPERATOR, position.net_minor()),
+        (ACH_OUTGOING, position.sent_minor),
+        (ACH_INCOMING, -position.received_minor),
+    ]
+    .into_iter()
+    .filter(|(_, amount)| *amount != 0)
+    .map(|(account, amount)| Posting::new(account, amount))
+    .collect()
 }
 
 #[cfg(test)]
@@ -343,5 +407,136 @@ mod tests {
             Err(TransferError::SameBank("pet-a".into()))
         );
         assert_eq!(transfer(10).validate(), Ok(()));
+    }
+
+    fn ach_file(origin: &str, payments: &[(&str, i64)]) -> AchFile {
+        use crate::nacha::{Batch, Entry};
+        AchFile {
+            origin_bank: origin.into(),
+            destination_bank: "operator".into(),
+            created_yymmdd: "261012".into(),
+            created_hhmm: "1200".into(),
+            file_id_modifier: 'A',
+            batches: vec![Batch {
+                originating_bank: origin.into(),
+                company_name: "test".into(),
+                company_id: "TEST000001".into(),
+                entry_description: "PAYMENT".into(),
+                effective_yymmdd: "261013".into(),
+                batch_number: 1,
+                entries: payments
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (to, amount))| Entry {
+                        kind: EntryKind::Credit,
+                        receiving_bank: (*to).into(),
+                        account: "alex".into(),
+                        amount_minor: *amount,
+                        individual_id: "you".into(),
+                        individual_name: "Alex".into(),
+                        trace_seq: i as u32 + 1,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    /// Six payments in three files.
+    fn window() -> Vec<AchFile> {
+        vec![
+            ach_file("pet-a", &[("pet-b", 1_000), ("pet-c", 500), ("pet-b", 250)]),
+            ach_file("pet-b", &[("pet-a", 700), ("pet-c", 300)]),
+            ach_file("pet-c", &[("pet-a", 2_000)]),
+        ]
+    }
+
+    #[test]
+    fn rails_ach_net_position_equals_the_sum_of_gross_flows_for_each_bank() {
+        let files = window();
+        let positions = ach_positions(&files);
+        for bank in ["pet-a", "pet-b", "pet-c"] {
+            let sent: i64 = files
+                .iter()
+                .filter(|f| f.origin_bank == bank)
+                .flat_map(|f| f.batches.iter().flat_map(|b| &b.entries))
+                .map(|e| e.amount_minor)
+                .sum();
+            let received: i64 = files
+                .iter()
+                .flat_map(|f| f.batches.iter().flat_map(|b| &b.entries))
+                .filter(|e| e.receiving_bank == bank)
+                .map(|e| e.amount_minor)
+                .sum();
+            let p = positions[bank];
+            assert_eq!((p.sent_minor, p.received_minor), (sent, received), "{bank}");
+            assert_eq!(p.net_minor(), received - sent, "{bank}");
+        }
+        // pet-a: sent 1750, received 2700 → +950; pet-b: sent 1000, received 1250 → +250;
+        // pet-c: sent 2000, received 800 → −1200.
+        let nets: Vec<i64> = positions.values().map(Position::net_minor).collect();
+        assert_eq!(nets, [950, 250, -1_200]);
+    }
+
+    #[test]
+    fn rails_ach_settlement_is_one_zero_sum_entry_and_clears_every_bank() {
+        let mut net = network();
+        let mut c = Ledger::open_in_memory().expect("ledger");
+        open_bank(&mut c).expect("open");
+        open_operator(&mut net.operator, &["pet-c"]).expect("join");
+        let positions = ach_positions(&window());
+
+        // Origination and receipt, as the rail books them.
+        let mut banks = [
+            ("pet-a", &mut net.a),
+            ("pet-b", &mut net.b),
+            ("pet-c", &mut c),
+        ];
+        for (bank, ledger) in banks.iter_mut() {
+            for customer in ["customer:you", "customer:alex"] {
+                ledger
+                    .ensure_account(customer, AccountKind::Liability)
+                    .expect("customer");
+            }
+            let p = positions[*bank];
+            book(
+                ledger,
+                "sent",
+                vec![
+                    Posting::new("customer:you", p.sent_minor),
+                    Posting::new(ACH_OUTGOING, -p.sent_minor),
+                ],
+            );
+            book(
+                ledger,
+                "received",
+                vec![
+                    Posting::new(ACH_INCOMING, p.received_minor),
+                    Posting::new("customer:alex", -p.received_minor),
+                ],
+            );
+        }
+
+        let operator_legs = operator_ach_settlement(&positions);
+        assert_eq!(operator_legs.iter().map(|p| p.amount_minor).sum::<i64>(), 0);
+        book(&mut net.operator, "ACH window 1", operator_legs);
+        for (bank, ledger) in banks.iter_mut() {
+            book(
+                ledger,
+                "ACH settlement",
+                bank_ach_settlement(&positions[*bank]),
+            );
+            assert_eq!(balance(ledger, ACH_OUTGOING), 0, "{bank}: outgoing cleared");
+            assert_eq!(balance(ledger, ACH_INCOMING), 0, "{bank}: incoming cleared");
+            assert_eq!(
+                balance(ledger, RESERVES_AT_OPERATOR),
+                -balance(&net.operator, &operator_account(bank)),
+                "{bank} reconciles with the operator"
+            );
+            assert_eq!(total(ledger), 0);
+        }
+        assert_eq!(
+            balance(&net.operator, &operator_account("pet-c")),
+            -(OPENING_RESERVES - 1_200)
+        );
     }
 }

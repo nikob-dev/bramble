@@ -84,6 +84,9 @@ pub struct Entry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Batch {
+    /// The bank that originated these entries (ODFI). Usually the file's sender, but a
+    /// file forwarded by the operator carries batches from several banks.
+    pub originating_bank: String,
     pub company_name: String,
     pub company_id: String,
     pub entry_description: String,
@@ -232,7 +235,6 @@ impl AchFile {
 
     pub fn to_nacha(&self) -> Result<String, NachaError> {
         let origin = routing(&self.origin_bank)?;
-        let odfi = &origin[..8];
         let destination = routing(&self.destination_bank)?;
         let mut lines = Vec::new();
 
@@ -254,6 +256,7 @@ impl AchFile {
         ));
 
         for batch in &self.batches {
+            let odfi = &routing(&batch.originating_bank)?[..8];
             let class = service_class(batch);
             let company_id = ident("company id", &batch.company_id, 10)?;
             let batch_number = num("batch number", batch.batch_number.into(), 7)?;
@@ -449,7 +452,14 @@ fn parse_batch<'a, I>(
 where
     I: Iterator<Item = &'a Line<'a>>,
 {
+    let odfi = header.field(80, 87);
+    let originating_bank = ROUTING
+        .iter()
+        .find(|(_, r)| &r[..8] == odfi)
+        .map(|(b, _)| (*b).to_owned())
+        .ok_or_else(|| format_err(header.number, format!("unknown originating bank {odfi}")))?;
     let mut batch = Batch {
+        originating_bank,
         company_name: header.text(5, 20),
         company_id: header.text(41, 50),
         entry_description: header.text(54, 63),
@@ -538,6 +548,7 @@ mod tests {
             created_hhmm: "0930".into(),
             file_id_modifier: 'A',
             batches: vec![Batch {
+                originating_bank: "pet-a".into(),
                 company_name: "Pip Bank customers".into(),
                 company_id: "PETA000001".into(),
                 entry_description: "PAYMENT".into(),

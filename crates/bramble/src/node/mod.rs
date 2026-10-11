@@ -1,5 +1,6 @@
 //! `bramble node`: the pet-bank daemon. Owns the ledger and the pet; serves clients.
 
+mod ach_bank;
 mod api;
 mod identity;
 mod net;

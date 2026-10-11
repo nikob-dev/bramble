@@ -7,12 +7,12 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use bramble_core::lesson::PostingSpec;
-use bramble_ledger::rails::{Ach, Rail, Transfer};
-use bramble_ledger::{Ledger, LedgerError, NewEntry, OutboxItem, PostOutcome, Posting, nacha};
+use bramble_ledger::{Ledger, LedgerError, NewEntry, PostOutcome, Posting};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::rtp::{PaymentRequest, SendOutcome, check_outgoing, send_payment};
+use super::ach_bank::{Refusal, originate};
+use super::rtp::{PaymentRequest, SendOutcome, send_payment};
 use super::{Shared, now_unix};
 
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -96,79 +96,20 @@ pub async fn post_ach_payment(
     let key = headers
         .get(IDEMPOTENCY_HEADER)
         .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-        .unwrap_or_else(bramble_net::new_nonce);
-    let transfer = Transfer {
-        debtor_bank: shared.net.id.clone(),
-        debtor_account: request.from_account.clone(),
-        creditor_bank: request.to_bank.clone(),
-        creditor_account: request.to_account.clone(),
-        amount_minor: request.amount_minor,
-    };
-    let refuse = |error: String| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "status": "refused", "error": error })),
-        )
-    };
-    if nacha::routing_number(&transfer.creditor_bank).is_none()
-        || transfer.creditor_bank == shared.operator_id
-    {
-        return refuse(format!(
-            "{:?} is not a bank on this network",
-            transfer.creditor_bank
-        ));
-    }
-
-    let mut world = shared.world.lock().await;
-    let booked_key = format!("ach:{}-{key}", shared.net.id);
-    // A retry of a payment that's already queued replays, even if funds have since dropped.
-    if world
-        .ledger
-        .entry_id_by_idempotency_key(&booked_key)
-        .ok()
-        .flatten()
-        .is_none()
-        && let Err(error) = check_outgoing(&world.ledger, &transfer)
-    {
-        return refuse(error);
-    }
-    let receiver_name = request
-        .receiver_name
-        .unwrap_or_else(|| crate::ach::file_account(&transfer.creditor_account).to_owned());
-    let entry = NewEntry {
-        memo: format!(
-            "ACH to {}/{}: {}",
-            transfer.creditor_bank, transfer.creditor_account, request.memo
+        .map(str::to_owned);
+    let (status, body) = match originate(&shared, request, key).await {
+        Ok(PostOutcome::Created(entry_id)) => (
+            StatusCode::CREATED,
+            json!({ "status": "queued", "entry_id": entry_id }),
         ),
-        idempotency_key: Some(booked_key),
-        postings: Ach.debtor_postings(&transfer),
-    };
-    let item = OutboxItem {
-        originator: transfer.debtor_account.clone(),
-        receiving_bank: transfer.creditor_bank.clone(),
-        receiving_account: transfer.creditor_account.clone(),
-        receiver_name,
-        amount_minor: transfer.amount_minor,
-    };
-    let (status, body) = match world.ledger.originate_ach(&entry, &item) {
-        Ok(PostOutcome::Created(entry_id)) => {
-            let _ = shared.updates.send(world.snapshot(None, now_unix()));
-            (
-                StatusCode::CREATED,
-                json!({ "status": "queued", "entry_id": entry_id }),
-            )
-        }
         Ok(PostOutcome::Replayed(entry_id)) => (
             StatusCode::OK,
             json!({ "status": "queued", "entry_id": entry_id, "replayed": true }),
         ),
-        Err(error @ LedgerError::IdempotencyConflict(_)) => {
-            (StatusCode::CONFLICT, json!({ "error": error.to_string() }))
-        }
-        Err(error) => (
+        Err(Refusal::Conflict(error)) => (StatusCode::CONFLICT, json!({ "error": error })),
+        Err(Refusal::Invalid(error)) => (
             StatusCode::UNPROCESSABLE_ENTITY,
-            json!({ "status": "refused", "error": error.to_string() }),
+            json!({ "status": "refused", "error": error }),
         ),
     };
     tracing::info!(status = status.as_u16(), body = %body, "api ach payment");

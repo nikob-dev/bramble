@@ -90,11 +90,12 @@ pub enum Rail {
     Ach,
 }
 
-const KNOWN_KINDS: [&str; 4] = [
+const KNOWN_KINDS: [&str; 5] = [
     "rtp_credit_transfer",
     "rtp_status",
     "ach_file",
     "settlement_notice",
+    "ach_cutoff",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,7 +119,8 @@ pub enum NetMsg {
         #[serde(default)]
         reason: Option<String>,
     },
-    /// A Nacha-format file of batched ACH entries, as text.
+    /// A Nacha-format file of batched ACH entries, as text. Empty `contents` means
+    /// "nothing to send this window".
     AchFile { file_id: String, contents: String },
     /// The operator moved money in a bank's settlement account. Positive amounts are
     /// credits to the bank (it received funds); negative amounts are debits.
@@ -129,6 +131,8 @@ pub enum NetMsg {
         amount_minor: i64,
         reference: String,
     },
+    /// The operator closing an ACH settlement window: each bank answers with its file.
+    AchCutoff { window: u32 },
 }
 
 impl NetMsg {
@@ -138,6 +142,7 @@ impl NetMsg {
             NetMsg::RtpStatus { .. } => "rtp_status",
             NetMsg::AchFile { .. } => "ach_file",
             NetMsg::SettlementNotice { .. } => "settlement_notice",
+            NetMsg::AchCutoff { .. } => "ach_cutoff",
         }
     }
 }
@@ -177,6 +182,7 @@ mod tests {
                 amount_minor: -1300,
                 reference: "cutoff 1".into(),
             },
+            NetMsg::AchCutoff { window: 1 },
         ]
     }
 
