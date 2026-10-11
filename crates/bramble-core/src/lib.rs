@@ -6,6 +6,7 @@ pub mod curriculum;
 pub mod lesson;
 pub mod mastery;
 pub mod money;
+pub mod net;
 pub mod pet;
 pub mod protocol;
 pub mod session;
