@@ -45,6 +45,7 @@ make logs     # structured JSON logs from the node
 | `crates/bramble` | The `bramble` binary (node daemon, TUI, CLI tools) |
 | `content/` | Lessons and concept graph as data (TOML) |
 | `docker/` | Multi-stage Dockerfile (`dev` and `runtime` targets) |
+| `docs/roadmap.md` | Architecture and milestone plan |
 | `docs/decisions.md` | Architecture decision log |
 
 ## Roadmap
