@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: test lint build up start play logs down reset e2e e2e-smoke e2e-lab
+.PHONY: test lint build up start play logs down reset e2e e2e-smoke e2e-lab clean-docker
 
 test:
 	docker compose run --rm dev cargo test --workspace
@@ -27,6 +27,13 @@ logs:
 
 down:
 	docker compose down
+
+# Reclaim disk from Docker: build cache and dangling images (all regenerable).
+# Keeps volumes, so your pet and the cargo cache survive. Next build is slower.
+clean-docker:
+	docker builder prune -af
+	docker image prune -f
+	docker system df
 
 # Wipe your pet's bank and progress back to lesson 1.
 reset:

@@ -50,6 +50,7 @@ make e2e      # plays the whole track through the real TUI in an isolated compos
               # (PYTHON=/path/to/python3 to pick an interpreter)
 make up       # rebuild and restart after code changes
 make reset    # wipe your pet back to lesson 1
+make clean-docker  # reclaim disk: Docker build cache + dangling images (keeps volumes)
 make logs     # structured JSON logs from the node
 ```
 
