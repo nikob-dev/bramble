@@ -45,3 +45,27 @@
 **Context:** M3 adds a browser UI. Lessons are verified by watching real shell commands, which only exist in the TUI's lab.
 **Decision:** The Leptos app shows pet, lesson, mastery map, and the books, live over the same WebSocket as the TUI. It sends nothing. State messages carry a ledger view, and the node broadcasts after every API post, so a `curl` payment shows up in the browser instantly.
 **Implementation notes:** WebSocket via raw `web-sys` (visible open/message/close/reconnect, no extra crates). Unknown messages are skipped, never fatal. `wasm-bindgen` is pinned exactly because trunk downloads the matching CLI. trunk 0.21.14 is installed from release binaries with **pinned SHA-256s** in the Dockerfile, so a tampered release fails the build. Text reflow and pet art moved into `bramble-core` so both clients render identically.
+
+## 011 — Pets talk over plain HTTP with signed envelopes, not libp2p (2026-10-11)
+**Context:** The roadmap planned libp2p gossipsub with mDNS discovery for M4. M4's lessons are about payment rails; the networking layer only has to deliver messages between 4 containers that Docker Compose already names.
+**Decision:** Each node exposes `POST /net/envelope` on the compose network only (never published to the host). Peers come from a static `BRAMBLE_PEERS` list. Every message is an envelope `{v, kind, from, ts, nonce, payload, sig}` signed with the node's Ed25519 key. Receivers reject bad signatures, unknown major versions, stale timestamps and replayed nonces.
+**Trade-off:** No discovery and no gossip. libp2p moves to M5, where many reviewers gossip proposals and that cost buys something.
+
+## 012 — An operator node settles between banks (2026-10-11)
+**Context:** Banks on real rails don't settle with each other directly. They settle through an operator: the Fed (FedACH, Fedwire) or The Clearing House (RTP).
+**Decision:** A 4th container runs the same binary as `bramble node --role operator`. It holds one account per bank and moves those balances: immediately per payment for RTP, and once per cutoff, netted, for ACH. Each bank mirrors its balance at the operator in a `reserves:operator` account.
+**Why:** Teaches the real model, and makes cross-bank breaks (bank vs operator) something the learner can find.
+
+## 013 — ACH cutoff is triggered, with an optional timer (2026-10-11)
+**Decision:** `bramble ach cutoff` closes the batch. `BRAMBLE_ACH_CUTOFF_SECS` adds a periodic cutoff and is off by default.
+**Why:** Tests stay deterministic, and lessons decide when settlement happens. Real ACH runs several fixed settlement windows a day; the lesson text says so.
+
+## 014 — ACH files use a Nacha subset (2026-10-11)
+**Decision:** Real 94-character fixed-width records: file header (1), batch header (5), entry detail (6), batch control (8) and file control (9). The entry hash and dollar totals are computed and checked. No addenda records and no blocking-factor padding yet.
+**Why:** Learners inspect authentic-looking files with `cat`, `cut` and `awk`.
+
+## 015 — The learner banks at pet-a; the other banks are counterparties (2026-10-11)
+**Decision:** `make play` attaches to pet-a (pip), as before. pet-b and pet-c have their own dashboards on host ports 8082 and 8083; the operator's read-only dashboard is on 8090. All ports bind to localhost. Only pet-a's lab is used in lessons.
+
+## 016 — The Rails track: 4 lessons and a cutaway (2026-10-11)
+**Decision:** Four lessons: instant payments (RTP), batch payments (ACH), netting & settlement, and cross-bank reconciliation. A cutaway compares RTP and ACH on speed, cost, finality, failure modes and float. Every lesson cites primary sources (Nacha, the Federal Reserve, The Clearing House).
