@@ -131,6 +131,28 @@ check = { type = "quiz_answer", answer = "a" }
 [[steps]]
 kind = "explain"
 text = """
+CUTAWAY: the two rails side by side.
+
+  Speed       RTP  seconds, any day
+              ACH  the next settlement window
+  Settles     RTP  gross: one at a time
+              ACH  net: once per window
+  Final?      RTP  yes, the moment it settles
+              ACH  can still come back (a return)
+  Liquidity   RTP  reserves for every payment
+              ACH  only each bank's net position
+  Failures    RTP  refused before money moves
+              ACH  found later, as returns (R03)
+  Float       RTP  none: money moves at once
+              ACH  payer debited now, payee later
+
+Neither rail is "better". Payroll for 10,000 people fits ACH; paying a contractor at 11pm
+on a Sunday fits RTP. Real banks run both.
+"""
+
+[[steps]]
+kind = "explain"
+text = """
 What we learned:
   • GROSS settlement (RTP) moves money per payment: instant and final, but every payment
     needs reserves on hand.

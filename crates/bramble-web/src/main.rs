@@ -354,6 +354,32 @@ fn EntryList(entries: Vec<EntryView>) -> impl IntoView {
     }
 }
 
+/// The Rails track's cutaway (the netting lesson says the same in the terminal).
+const RAILS_COMPARED: [(&str, &str, &str); 6] = [
+    ("Speed", "seconds, any day", "the next settlement window"),
+    ("Settles", "gross: one at a time", "net: once per window"),
+    (
+        "Final?",
+        "yes, the moment it settles",
+        "can still come back (a return)",
+    ),
+    (
+        "Liquidity",
+        "reserves for every payment",
+        "only each bank's net position",
+    ),
+    (
+        "Failures",
+        "refused before money moves",
+        "found later, as returns (R03)",
+    ),
+    (
+        "Float",
+        "none: money moves at once",
+        "payer debited now, payee paid later",
+    ),
+];
+
 /// This bank's place in the payment network: money at the operator, ACH waiting.
 #[component]
 fn NetworkCard(network: NetworkView) -> impl IntoView {
@@ -376,6 +402,17 @@ fn NetworkCard(network: NetworkView) -> impl IntoView {
                 "Instant (RTP) payments move reserves at once. ACH waits for "
                 <code>"bramble ach cutoff"</code> ", then settles net."
             </p>
+            <details class="cutaway">
+                <summary>"RTP vs ACH at a glance"</summary>
+                <table>
+                    <thead><tr><th></th><th>"RTP (instant)"</th><th>"ACH (batch)"</th></tr></thead>
+                    <tbody>
+                        {RAILS_COMPARED.iter().map(|(aspect, rtp, ach)| view! {
+                            <tr><th>{*aspect}</th><td>{*rtp}</td><td>{*ach}</td></tr>
+                        }).collect_view()}
+                    </tbody>
+                </table>
+            </details>
         </section>
     }
 }
