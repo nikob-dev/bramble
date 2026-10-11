@@ -47,7 +47,9 @@ pub enum Outcome {
     /// Moved past an explanation.
     Continued,
     /// A task's check passed.
-    Passed { success: Option<String> },
+    Passed {
+        success: Option<String>,
+    },
     HintRevealed,
     NoHint,
     WrongAnswer,
@@ -84,7 +86,11 @@ pub fn observe(
     facts: &dyn Facts,
 ) -> (LessonProgress, Vec<Outcome>) {
     let mut next = progress.clone();
-    let Some(step) = lesson.steps.get(progress.step).filter(|_| !progress.completed) else {
+    let Some(step) = lesson
+        .steps
+        .get(progress.step)
+        .filter(|_| !progress.completed)
+    else {
         return (next, Vec::new());
     };
     let control = control(&obs.cmd);
@@ -223,7 +229,13 @@ mod tests {
         }
     }
 
-    fn run(lesson: &Lesson, progress: LessonProgress, cmd: &str, exit: i32, out: &str) -> (LessonProgress, Vec<Outcome>) {
+    fn run(
+        lesson: &Lesson,
+        progress: LessonProgress,
+        cmd: &str,
+        exit: i32,
+        out: &str,
+    ) -> (LessonProgress, Vec<Outcome>) {
         observe(lesson, &progress, &obs(cmd, exit, out), &Bank(-7150))
     }
 
@@ -235,15 +247,33 @@ mod tests {
         assert_eq!(o, vec![Outcome::Continued]);
         let (p, o) = run(&lesson, p, "bramble ledger accounts", 0, "...");
         assert!(matches!(o[..], [Outcome::Passed { .. }]));
-        let (p, o) = run(&lesson, p, "bramble ledger accounts", 0, "customer:you -7150\n");
-        assert!(o.is_empty(), "right number from the wrong command doesn't count");
-        let (p, o) = run(&lesson, p, "sqlite3 ledger.db 'select sum(...)'", 0, "-7150\n");
+        let (p, o) = run(
+            &lesson,
+            p,
+            "bramble ledger accounts",
+            0,
+            "customer:you -7150\n",
+        );
+        assert!(
+            o.is_empty(),
+            "right number from the wrong command doesn't count"
+        );
+        let (p, o) = run(
+            &lesson,
+            p,
+            "sqlite3 ledger.db 'select sum(...)'",
+            0,
+            "-7150\n",
+        );
         assert!(matches!(o[..], [Outcome::Passed { .. }]));
         let (p, o) = run(&lesson, p, "bramble answer a", 0, "");
         assert_eq!(o, vec![Outcome::WrongAnswer]);
         assert_eq!(p.wrong_answers, 1);
         let (p, o) = run(&lesson, p, "bramble answer B", 0, "");
-        assert!(matches!(o[..], [Outcome::Passed { .. }, Outcome::Completed]));
+        assert!(matches!(
+            o[..],
+            [Outcome::Passed { .. }, Outcome::Completed]
+        ));
         assert!(p.completed);
         let (_, o) = run(&lesson, p, "bramble next", 0, "");
         assert!(o.is_empty(), "completed lessons ignore further input");
@@ -252,7 +282,10 @@ mod tests {
     #[test]
     fn session_observe_ignores_unrelated_and_failed_commands() {
         let lesson = lesson();
-        let p = LessonProgress { step: 1, ..LessonProgress::start(&lesson) };
+        let p = LessonProgress {
+            step: 1,
+            ..LessonProgress::start(&lesson)
+        };
         let (_, o) = run(&lesson, p.clone(), "ls -la", 0, "");
         assert!(o.is_empty());
         let (_, o) = run(&lesson, p, "bramble ledger accounts", 1, "");
@@ -262,7 +295,10 @@ mod tests {
     #[test]
     fn session_observe_hint_is_counted_once_per_step() {
         let lesson = lesson();
-        let p = LessonProgress { step: 1, ..LessonProgress::start(&lesson) };
+        let p = LessonProgress {
+            step: 1,
+            ..LessonProgress::start(&lesson)
+        };
         let (p, o) = run(&lesson, p, "bramble hint", 0, "");
         assert_eq!(o, vec![Outcome::HintRevealed]);
         let (p, o) = run(&lesson, p, "bramble hint", 0, "");
@@ -277,7 +313,10 @@ mod tests {
     #[test]
     fn session_observe_next_on_unsolved_task_is_pending() {
         let lesson = lesson();
-        let p = LessonProgress { step: 1, ..LessonProgress::start(&lesson) };
+        let p = LessonProgress {
+            step: 1,
+            ..LessonProgress::start(&lesson)
+        };
         let (p2, o) = run(&lesson, p.clone(), "bramble next", 0, "");
         assert_eq!(o, vec![Outcome::TaskPending]);
         assert_eq!(p2, p);

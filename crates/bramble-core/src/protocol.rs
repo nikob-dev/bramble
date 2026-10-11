@@ -112,6 +112,9 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).expect("serialize");
         assert!(json.contains(r#""type":"observe""#));
-        assert_eq!(serde_json::from_str::<ClientMsg>(&json).expect("parse"), msg);
+        assert_eq!(
+            serde_json::from_str::<ClientMsg>(&json).expect("parse"),
+            msg
+        );
     }
 }

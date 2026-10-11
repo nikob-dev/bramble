@@ -224,9 +224,9 @@ impl Ledger {
     }
 
     pub fn accounts(&self) -> Result<Vec<AccountBalance>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT account_id, kind, balance_minor FROM balances ORDER BY account_id",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT account_id, kind, balance_minor FROM balances ORDER BY account_id")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,

@@ -111,7 +111,9 @@ impl Pet {
                 next.energy = clamp(next.energy + 20.0);
                 return (
                     next,
-                    format!("We finished \"{title}\"! I understand my own bank a little better now."),
+                    format!(
+                        "We finished \"{title}\"! I understand my own bank a little better now."
+                    ),
                 );
             }
         };
@@ -158,10 +160,14 @@ mod tests {
     fn pet_apply_step_and_lesson_award_xp_and_level() {
         let pet = Pet::new("pip", 0);
         let (pet, _) = pet.apply(&PetEvent::StepPassed);
-        let (pet, line) = pet.apply(&PetEvent::LessonCompleted { title: "Money is rows".into() });
+        let (pet, line) = pet.apply(&PetEvent::LessonCompleted {
+            title: "Money is rows".into(),
+        });
         assert_eq!(pet.xp, 60);
         assert!(line.contains("Money is rows"));
-        let (pet, _) = (0..4).fold((pet, String::new()), |(p, _), _| p.apply(&PetEvent::StepPassed));
+        let (pet, _) = (0..4).fold((pet, String::new()), |(p, _), _| {
+            p.apply(&PetEvent::StepPassed)
+        });
         assert_eq!(pet.level(), 2);
     }
 }

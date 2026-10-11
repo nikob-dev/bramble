@@ -128,7 +128,13 @@ mod tests {
         )
         .expect("valid lesson");
         assert_eq!(lesson.steps.len(), 2);
-        assert!(matches!(&lesson.steps[1], Step::Task { check: Check::CommandRan { .. }, .. }));
+        assert!(matches!(
+            &lesson.steps[1],
+            Step::Task {
+                check: Check::CommandRan { .. },
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -160,7 +166,11 @@ mod tests {
                 count += 1;
             }
         }
-        assert!(count > 0, "expected at least one lesson in {}", dir.display());
+        assert!(
+            count > 0,
+            "expected at least one lesson in {}",
+            dir.display()
+        );
     }
 
     #[test]
