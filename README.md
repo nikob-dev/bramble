@@ -4,7 +4,7 @@ A pet that lives in your terminal and your browser, runs a tiny bank, and teache
 
 Pets are self-learning teachers. They read payment-industry sources, propose what they learned to the other pets, and the network (a small DAO, including you as a validator) decides what enters the shared curriculum. Teaching adapts to how you're progressing.
 
-> Status: **M1 walking skeleton**: one pet-bank, a terminal lab, and the first lesson. See [the roadmap](#roadmap).
+> Status: **M2**: an adaptive Teacher and the full Ledgers track (5 lessons). See [the roadmap](#roadmap).
 
 ## Requirements
 - Docker (Desktop, OrbStack, or Colima). No local Rust toolchain needed.
@@ -24,15 +24,29 @@ Everything you do happens there:
 | `bramble ledger accounts` | List the bank's accounts and balances |
 | `bramble ledger postings [account]` | Show the raw rows behind a balance |
 | `sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db` | Query the ledger directly |
+| `curl localhost:8080/api/...` | The pet-bank's payments API (entries, statements, files, keys) |
+
+### The Ledgers track
+| Lesson | You'll… |
+|---|---|
+| Money is rows | compute a balance yourself with SQL |
+| Double-entry | pay Alex through the payments API, then watch the database reject a forged entry |
+| Idempotency | find a double charge, retry safely with an `Idempotency-Key`, refund with a reversing entry |
+| Reconciliation | join the card network's settlement report against the ledger and find the break |
+| Hashing & signatures | verify a payment batch with `sha256sum` and an Ed25519 signature, then catch tampering |
+
+Your pet decides what comes next and tells you why. It tracks mastery per concept (the **mastery**
+column, shown on terminals ≥120 columns wide), sends you back for practice when something isn't solid,
+skips warm-ups when you're flying, and schedules spaced reviews (1, 3, 7, 21 days).
 
 `Ctrl-Q` leaves the TUI; your pet keeps running (`make down` stops it). Progress persists in a Docker volume.
-The node also serves `http://localhost:8081/api/state`. The browser UI arrives in M3.
+From your host, the node answers on `http://127.0.0.1:8081` (localhost only). The browser UI arrives in M3.
 
 ## Development
 ```sh
 make test     # unit + integration tests in the dev container
 make lint     # rustfmt + clippy (-D warnings)
-make e2e      # drives the real TUI through a PTY in an isolated compose project
+make e2e      # plays the whole track through the real TUI in an isolated compose project
               # (PYTHON=/path/to/python3 to pick an interpreter)
 make logs     # structured JSON logs from the node
 ```
