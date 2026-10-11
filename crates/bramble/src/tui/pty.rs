@@ -13,6 +13,16 @@ HISTCONTROL=
 HISTFILE="$HOME/.bramble_history"
 PS1='\[\e[1;32m\]learner\[\e[0m\]@\[\e[1;35m\]${BRAMBLE_PET_NAME:-pip}\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
 PS0=$'\e]7771\a'
+PS2='\[\e[33m\]… unfinished quote or line: finish it, or Ctrl-C to cancel > \[\e[0m\]'
+command_not_found_handle() {
+    if (( $# >= 3 )); then
+        printf '%s: that looks like a sentence. This pane is a bash shell, so it only runs commands.\n' "${BRAMBLE_PET_NAME:-pip}" >&2
+        printf 'Chatting with me comes later; for now, type the command shown at the bottom of my lesson panel.\n' >&2
+    else
+        printf 'bash: %s: command not found\n' "$1" >&2
+    fi
+    return 127
+}
 __bramble_hook() {
     local ec=$? num cmd
     read -r num cmd <<< "$(HISTTIMEFORMAT= builtin history 1)"

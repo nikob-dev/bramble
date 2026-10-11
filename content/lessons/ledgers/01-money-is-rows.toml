@@ -10,10 +10,12 @@ url = "https://www.bankofengland.co.uk/quarterly-bulletin/2014/q1/money-creation
 kind = "explain"
 text = """
 Hi! I just opened a bank... but I don't actually know what money IS inside a bank.
-Will you help me find out?
+Let's find out together.
 
 Here's a rumour: the money in your bank account isn't coins in a vault.
 It's rows in a database.
+
+The pane at the bottom is a real bash shell. You answer me with commands, not sentences.
 """
 
 [[steps]]
