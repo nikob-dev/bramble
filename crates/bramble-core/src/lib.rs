@@ -1,14 +1,10 @@
-//! Pure domain logic for Bramble: pet state, curriculum graph, mastery, protocol types.
-//! No IO lives here so everything stays deterministic and unit-testable.
+//! Pure domain logic for Bramble: pet state, lessons, the lesson session state
+//! machine, and wire-protocol types. No IO lives here so everything stays
+//! deterministic and unit-testable.
+
+pub mod lesson;
+pub mod pet;
+pub mod protocol;
+pub mod session;
 
 pub const PROTOCOL_VERSION: u16 = 1;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn protocol_version_starts_at_one() {
-        assert_eq!(PROTOCOL_VERSION, 1);
-    }
-}

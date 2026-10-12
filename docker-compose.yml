@@ -17,8 +17,16 @@ services:
       dockerfile: docker/Dockerfile
       target: runtime
     image: bramble:dev
+    command: ["node"]
     environment:
       BRAMBLE_PET_NAME: pip
+    ports:
+      - "${BRAMBLE_PET_A_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
     env_file:
       - path: .env
         required: false
