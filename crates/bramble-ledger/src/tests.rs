@@ -178,8 +178,72 @@ fn ledger_accounts_and_postings_report_posted_rows() {
 }
 
 #[test]
-fn format_minor_renders_sign_and_cents() {
-    assert_eq!(format_minor(-7_150), "-$71.50");
-    assert_eq!(format_minor(5), "$0.05");
-    assert_eq!(format_minor(0), "$0.00");
+fn ledger_max_entry_id_and_key_lookup() {
+    let mut ledger = bank();
+    assert_eq!(ledger.max_entry_id().expect("max"), 0);
+    let id = ledger
+        .post(&deposit(100, Some("k1")))
+        .expect("post")
+        .entry_id();
+    assert_eq!(ledger.max_entry_id().expect("max"), id);
+    assert_eq!(
+        ledger.entry_id_by_idempotency_key("k1").expect("lookup"),
+        Some(id)
+    );
+    assert_eq!(
+        ledger.entry_id_by_idempotency_key("nope").expect("lookup"),
+        None
+    );
+}
+
+#[test]
+fn ledger_find_entry_since_matches_exact_postings_after_watermark() {
+    let mut ledger = bank();
+    let first = ledger.post(&deposit(100, None)).expect("post").entry_id();
+    let second = ledger.post(&deposit(250, None)).expect("post").entry_id();
+    let wanted = [
+        Posting::new("customer:you", -100),
+        Posting::new("reserves", 100),
+    ];
+    assert_eq!(
+        ledger.find_entry_since(0, &wanted).expect("find"),
+        Some(first)
+    );
+    assert_eq!(
+        ledger.find_entry_since(first, &wanted).expect("find"),
+        None,
+        "watermark excludes older entries"
+    );
+    let later = [
+        Posting::new("reserves", 250),
+        Posting::new("customer:you", -250),
+    ];
+    assert_eq!(
+        ledger.find_entry_since(first, &later).expect("find"),
+        Some(second)
+    );
+    let partial = [Posting::new("reserves", 250)];
+    assert_eq!(
+        ledger.find_entry_since(0, &partial).expect("find"),
+        None,
+        "all legs must match"
+    );
+}
+
+#[test]
+fn ledger_recent_entries_groups_postings_newest_first() {
+    let mut ledger = bank();
+    for amount in [100, 200, 300] {
+        ledger.post(&deposit(amount, None)).expect("post");
+    }
+    let recent = ledger.recent_entries(2).expect("recent");
+    assert_eq!(recent.len(), 2);
+    assert_eq!(
+        recent[0].postings,
+        vec![
+            Posting::new("reserves", 300),
+            Posting::new("customer:you", -300)
+        ]
+    );
+    assert_eq!(recent[1].postings[0].amount_minor, 200);
 }

@@ -1,0 +1,18 @@
+[package]
+name = "bramble-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bramble-core.workspace = true
+console_error_panic_hook = "0.1.7"
+leptos = { version = "0.8.22", features = ["csr"] }
+serde_json.workspace = true
+# Exact pin: trunk downloads the matching wasm-bindgen CLI, and versions must agree.
+wasm-bindgen = "=0.2.129"
+web-sys = { version = "0.3.106", features = ["CloseEvent", "Location", "MessageEvent", "WebSocket", "Window"] }
+
+[lints]
+workspace = true

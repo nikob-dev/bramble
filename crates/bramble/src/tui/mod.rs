@@ -9,7 +9,9 @@ mod ui;
 use std::time::Duration;
 
 use bramble_core::PROTOCOL_VERSION;
-use bramble_core::protocol::{ClientMsg, LessonView, PetView, ServerMsg};
+use bramble_core::protocol::{
+    ActivityView, ClientMsg, ConceptView, LessonView, PetView, ServerMsg,
+};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
@@ -35,6 +37,8 @@ pub fn run(config: Config) -> anyhow::Result<()> {
 struct App {
     pet: Option<PetView>,
     lesson: Option<LessonView>,
+    mastery: Vec<ConceptView>,
+    activity: Option<ActivityView>,
     say: Option<String>,
     node_status: Option<String>,
     frame: u64,
@@ -49,6 +53,8 @@ impl App {
         let mut app = App {
             pet: None,
             lesson: None,
+            mastery: Vec::new(),
+            activity: None,
             say: None,
             node_status: Some("connecting…".into()),
             frame: 0,
@@ -74,6 +80,8 @@ impl App {
                     &ui::View {
                         pet: app.pet.as_ref(),
                         lesson: app.lesson.as_ref(),
+                        mastery: &app.mastery,
+                        activity: app.activity.as_ref(),
                         say: app.say.as_deref(),
                         node_status: app.node_status.as_deref(),
                         frame: app.frame,
@@ -118,9 +126,12 @@ impl App {
                     NodeEvent::Disconnected(reason) => {
                         app.node_status = Some(format!("offline ({reason})"));
                     }
-                    NodeEvent::Message(ServerMsg::State { pet, lesson, say, .. }) => {
+                    NodeEvent::Message(msg) => {
+                        let ServerMsg::State { pet, lesson, say, mastery, activity, .. } = *msg;
                         app.pet = Some(pet);
                         app.lesson = lesson;
+                        app.mastery = mastery;
+                        app.activity = activity;
                         if say.is_some() {
                             app.say = say;
                         }

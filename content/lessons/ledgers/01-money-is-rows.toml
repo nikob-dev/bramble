@@ -10,14 +10,17 @@ url = "https://www.bankofengland.co.uk/quarterly-bulletin/2014/q1/money-creation
 kind = "explain"
 text = """
 Hi! I just opened a bank... but I don't actually know what money IS inside a bank.
-Will you help me find out?
+Let's find out together.
 
 Here's a rumour: the money in your bank account isn't coins in a vault.
 It's rows in a database.
+
+The pane at the bottom is a real bash shell. You answer me with commands, not sentences.
 """
 
 [[steps]]
 kind = "task"
+id = "list-accounts"
 prompt = "Ask my bank which accounts it keeps. In the lab, run:  bramble ledger accounts"
 hint = "Type exactly `bramble ledger accounts` and press Enter."
 success = "Each line is an account. Look closely: customer:you is NEGATIVE. Remember that."
@@ -38,6 +41,7 @@ so a posting never creates or destroys money. It only moves it between accounts.
 
 [[steps]]
 kind = "task"
+id = "list-postings"
 prompt = "Look at the raw rows behind your account:  bramble ledger postings customer:you"
 hint = "Run `bramble ledger postings customer:you`."
 success = "Four rows: your paycheck, a coffee, rent, and a fee. That's your whole financial life here."
@@ -45,6 +49,7 @@ check = { type = "command_ran", pattern = '^bramble\s+ledger\s+postings\s+custom
 
 [[steps]]
 kind = "task"
+id = "sum-with-sql"
 prompt = """
 Now YOU be the bank. Compute the balance of customer:you yourself, with SQL,
 straight from the ledger file:
@@ -53,12 +58,18 @@ straight from the ledger file:
 
 Inside sqlite3, `.tables` and `.schema postings` show what's there. `.quit` exits.
 """
+worked_example = """
+sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'customer:you';"
+
+SUM() adds up every posting for one account. That total IS the balance.
+"""
 hint = """sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'customer:you';\""""
 success = "That's all a balance is: SUM() over rows. Banks cache it for speed, but the rows are the truth."
 check = { type = "ledger_balance", account = "customer:you", command = '^sqlite3\b' }
 
 [[steps]]
 kind = "task"
+id = "why-negative"
 prompt = """
 Quiz: why is customer:you negative?
 
@@ -83,3 +94,26 @@ What we learned:
 Next up: why every entry must balance to zero (double-entry), and what happens
 when someone tries to cheat.
 """
+
+[[review]]
+id = "minor-units"
+prompt = """
+Quick check: a posting of 7150 in amount_minor means...
+
+  a) $7,150.00
+  b) $71.50
+  c) $715.0
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Minor units are cents."
+check = { type = "quiz_answer", answer = "b" }
+
+[[review]]
+id = "reserves-balance"
+prompt = """
+Compute the balance of `reserves` (the bank's own cash) yourself with SQL against
+$BRAMBLE_DATA_DIR/ledger.db.
+"""
+hint = """sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings WHERE account_id = 'reserves';""""
+check = { type = "ledger_balance", account = "reserves", command = '^sqlite3\b' }

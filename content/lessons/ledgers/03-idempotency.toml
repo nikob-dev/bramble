@@ -1,0 +1,173 @@
+id = "idempotency"
+title = "Idempotency"
+concept = "idempotency"
+
+[[sources]]
+title = "Stripe API reference: Idempotent requests"
+url = "https://docs.stripe.com/api/idempotent_requests"
+
+[[sources]]
+title = "IETF draft: The Idempotency-Key HTTP Header Field"
+url = "https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/"
+
+[[setup.entries]]
+key = "bookstore-charge"
+memo = "Bookstore (card NR-0907)"
+debit = "customer:you"
+credit = "settlement:card-network"
+amount_minor = 2399
+
+[[setup.entries]]
+key = "bookstore-retry"
+memo = "Bookstore (card NR-0907)"
+debit = "customer:you"
+credit = "settlement:card-network"
+amount_minor = 2399
+
+[[steps]]
+kind = "explain"
+text = """
+Uh-oh. A customer (you!) just called: "I bought ONE book, but I was charged twice."
+
+Here's how that happens. The bookstore's server sends "charge $23.99" to my bank.
+My bank posts it, but the reply gets lost in a network timeout. The bookstore can't
+tell whether the charge went through, so it retries, and my bank happily charges again.
+
+Networks fail all the time. Retries are necessary. Double charges are not.
+"""
+
+[[steps]]
+kind = "task"
+id = "find-duplicate"
+prompt = '''
+Find the double charge in my ledger ($BRAMBLE_DATA_DIR/ledger.db, read-only): group your
+account's postings by memo and amount, and show only groups that appear more than once.
+'''
+hint = "GROUP BY memo and amount_minor, then HAVING COUNT(*) > 1. You'll need to JOIN postings to journal_entries for the memo."
+worked_example = '''
+sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "
+  SELECT e.memo, p.amount_minor, COUNT(*)
+  FROM postings AS p
+  JOIN journal_entries AS e ON e.id = p.entry_id
+  WHERE p.account_id = 'customer:you'
+  GROUP BY e.memo, p.amount_minor
+  HAVING COUNT(*) > 1;"
+'''
+success = "Two identical Bookstore charges. That's our duplicate."
+check = { type = "output_matches", pattern = '(?m)Bookstore.*\|\s*2\s*$', command = '^sqlite3\b' }
+
+[[steps]]
+kind = "explain"
+text = """
+The fix is an IDEMPOTENCY KEY. The client generates a unique key once per logical
+payment, sends it as a header, and reuses the SAME key on every retry.
+
+My bank remembers each key and a fingerprint of the request. If the same key arrives
+with the same request, it returns the original result instead of charging again. If the
+same key arrives with a DIFFERENT request, that's a client bug, and it gets refused.
+
+Stripe, Adyen, and most payment APIs work exactly like this.
+"""
+
+[[steps]]
+kind = "task"
+id = "retry-with-key"
+prompt = '''
+Buy an $8.00 bookmark (customer:you +800, settlement:card-network -800) with an
+idempotency key, then send the EXACT same request a second time, as if retrying after a
+timeout. Add the header:  -H 'Idempotency-Key: bookmark-001'
+'''
+hint = "Same curl command as last lesson, plus the Idempotency-Key header. Run it twice."
+worked_example = '''
+curl -s -X POST localhost:8080/api/entries -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: bookmark-001' \
+  -d '{"memo": "Bookmark", "postings": [
+        {"account": "customer:you", "amount_minor": 800},
+        {"account": "settlement:card-network", "amount_minor": -800}]}'
+
+The first call says "replayed":false. Press ↑ and Enter for the second: "replayed":true.
+'''
+success = "\"replayed\": true. Same entry id, charged exactly once. Retries are safe now."
+# No command pattern: the first call ("replayed":false) is a required step, not a stumble.
+check = { type = "output_matches", pattern = '"replayed":\s*true' }
+
+[[steps]]
+kind = "task"
+id = "key-conflict"
+prompt = "Now reuse the key bookmark-001 but change the amount to 900. What does my bank say?"
+hint = "Press ↑ to get your last curl command back, then change 800/-800 to 900/-900."
+success = "HTTP 409 Conflict. A key means one specific request, so changing the body is refused."
+check = { type = "output_matches", pattern = 'already used for a different request', command = '^curl\b' }
+
+[[steps]]
+kind = "task"
+id = "refund-duplicate"
+prompt = '''
+Now fix the double charge. Ledgers are append-only, so you can't DELETE the duplicate.
+Post a REVERSING entry instead: the exact mirror image of the duplicate bookstore
+charge (same accounts, opposite signs).
+'''
+hint = "The charge was customer:you +2399 / settlement:card-network -2399. Flip both signs."
+worked_example = '''
+curl -s -X POST localhost:8080/api/entries -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: refund-bookstore-dup' \
+  -d '{"memo": "Reversal: duplicate Bookstore NR-0907", "postings": [
+        {"account": "settlement:card-network", "amount_minor": 2399},
+        {"account": "customer:you", "amount_minor": -2399}]}'
+'''
+success = "Refunded, and the history still shows exactly what happened and how it was fixed."
+check = { type = "entry_exists", postings = [
+    { account = "settlement:card-network", amount_minor = 2399 },
+    { account = "customer:you", amount_minor = -2399 },
+] }
+
+[[steps]]
+kind = "task"
+id = "who-mints-keys"
+prompt = """
+Quiz: who should generate the idempotency key?
+
+  a) The server, when it receives the request.
+  b) The client: once per logical payment, reused on every retry.
+  c) The client: a fresh random key on every attempt.
+
+Answer with:  bramble answer <letter>
+"""
+hint = "The key has to be the same on the retry, and only the client knows it's retrying."
+success = "Yes! Only the client knows two attempts are the same payment."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • Lost replies plus retries cause duplicates. That's a networking fact, not bad luck.
+  • An idempotency key plus a request fingerprint make retries safe, and a key reused
+    with a different body gets HTTP 409.
+  • Ledgers never edit history. Mistakes get a reversing entry, so the audit trail stays complete.
+"""
+
+[[review]]
+id = "retry-same-key"
+prompt = """
+A payment request times out. When the client retries, it should send...
+
+  a) the same idempotency key
+  b) a new idempotency key
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "a" }
+
+[[review]]
+id = "fix-mistakes"
+prompt = """
+You find a wrong entry in a ledger. The right fix is to...
+
+  a) UPDATE the posting's amount
+  b) post a reversing entry (and then the correct one)
+  c) DELETE the entry
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

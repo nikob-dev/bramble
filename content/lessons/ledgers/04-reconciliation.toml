@@ -1,0 +1,164 @@
+id = "reconciliation"
+title = "Reconciliation"
+concept = "reconciliation"
+
+[[sources]]
+title = "Stripe docs: Payout reconciliation report"
+url = "https://docs.stripe.com/reports/payout-reconciliation"
+
+[[setup.entries]]
+key = "grocer"
+memo = "Grocer (card NR-1001)"
+debit = "customer:you"
+credit = "settlement:card-network"
+amount_minor = 1875
+
+[[setup.entries]]
+key = "pharmacy"
+memo = "Pharmacy (card NR-1002)"
+debit = "customer:you"
+credit = "settlement:card-network"
+amount_minor = 1240
+
+[[setup.entries]]
+key = "gas-station"
+memo = "Gas station (card NR-1003)"
+debit = "customer:you"
+credit = "settlement:card-network"
+amount_minor = 3152
+
+[[setup.statement]]
+network_ref = "NR-1001"
+description = "Grocer"
+amount_minor = 1875
+
+[[setup.statement]]
+network_ref = "NR-1002"
+description = "Pharmacy"
+amount_minor = 1240
+
+[[setup.statement]]
+network_ref = "NR-1003"
+description = "Gas station"
+amount_minor = 3125
+
+[[steps]]
+kind = "explain"
+text = """
+My bank isn't the only one keeping books. The card network keeps its own record of
+every card payment, and once a day it sends me a SETTLEMENT REPORT: "here's what we
+think happened, and here's what we'll settle with you."
+
+Two sets of books, kept by two companies, must agree. Comparing them line by line is
+called RECONCILIATION. A line that doesn't match is a BREAK, and every break gets
+investigated before money moves.
+"""
+
+[[steps]]
+kind = "task"
+id = "download-statement"
+prompt = '''
+Download today's settlement report from my bank's API into your lab:
+
+  curl -s localhost:8080/api/statements/card-network -o statement.csv
+
+Then have a look at it (cat is fine).
+'''
+hint = "Run the curl command exactly as shown, then: cat statement.csv"
+check = { type = "command_ran", pattern = '^curl\b.*statements/card-network' }
+
+[[steps]]
+kind = "task"
+id = "import-statement"
+scaffold = true
+prompt = '''
+Load the report into a scratch database so you can query it with SQL:
+
+  sqlite3 ~/lab/recon.db ".import --csv statement.csv statement"
+
+The CSV's header row becomes the column names.
+'''
+hint = '''Run: sqlite3 ~/lab/recon.db ".import --csv statement.csv statement"'''
+check = { type = "command_ran", pattern = '^sqlite3\b.*\.import' }
+
+[[steps]]
+kind = "task"
+id = "find-the-break"
+prompt = '''
+Reconcile! In ~/lab/recon.db, ATTACH my ledger ($BRAMBLE_DATA_DIR/ledger.db) and join the
+statement against my journal entries. My memos contain the network reference (NR-…).
+Compare amounts for customer:you and find the entry that doesn't match.
+
+Then tell me its entry id:  bramble answer <entry id>
+
+(Statement not imported yet? sqlite3 ~/lab/recon.db ".import --csv statement.csv statement")
+'''
+hint = "Join on e.memo LIKE '%' || s.network_ref || '%', then keep rows where the amounts differ."
+worked_example = '''
+sqlite3 ~/lab/recon.db "
+  ATTACH '$BRAMBLE_DATA_DIR/ledger.db' AS l;
+  SELECT p.entry_id, e.memo, p.amount_minor AS ours, s.amount_minor AS theirs
+  FROM statement AS s
+  JOIN l.journal_entries AS e ON e.memo LIKE '%' || s.network_ref || '%'
+  JOIN l.postings AS p ON p.entry_id = e.id AND p.account_id = 'customer:you'
+  WHERE p.amount_minor <> CAST(s.amount_minor AS INTEGER);"
+
+The first column is the entry id. Answer with it.
+'''
+success = "Found it: we booked $31.52 and the network says $31.25. That's a break."
+check = { type = "answer_entry", setup_key = "reconciliation:gas-station" }
+
+[[steps]]
+kind = "task"
+id = "transposition"
+prompt = """
+The difference is 3152 − 3125 = 27, which is divisible by 9. Accountants know this
+pattern well. What kind of mistake does it usually point to?
+
+  a) A duplicated transaction
+  b) Two digits swapped (a transposition)
+  c) A currency conversion error
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Look at the digits: 3152 vs 3125."
+success = "Exactly. Swapping two adjacent digits always changes a number by a multiple of 9."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • Every party keeps its own books. Reconciliation proves they agree.
+  • SQL joins are the reconciler's main tool: match on a shared reference, then compare amounts.
+  • A break gets investigated, then corrected with a new entry (never an edit).
+    Differences divisible by 9 hint at transposed digits.
+
+Real banks reconcile every account, every day. Unreconciled breaks are how fraud hides.
+"""
+
+[[review]]
+id = "divisible-by-nine"
+prompt = """
+A ledger line says 4710 and the statement says 4170 (a difference of 540). The most likely cause is...
+
+  a) a transposition: two digits were swapped
+  b) a duplicate charge
+  c) a missing fee
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "a" }
+
+[[review]]
+id = "fixing-breaks"
+prompt = """
+Reconciliation finds a break and the network's figure turns out to be right. You should...
+
+  a) edit the ledger row to match the statement
+  b) post a correcting entry for the difference, with a memo explaining the break
+  c) ignore it if it's under $1
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

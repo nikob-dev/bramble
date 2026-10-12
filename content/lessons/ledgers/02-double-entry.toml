@@ -1,0 +1,156 @@
+id = "double-entry"
+title = "Double-entry"
+concept = "double-entry"
+
+[[sources]]
+title = "Square Engineering: Books, an immutable double-entry accounting database service"
+url = "https://developer.squareup.com/blog/books-an-immutable-double-entry-accounting-database-service/"
+
+[[steps]]
+kind = "explain"
+text = """
+Last time we found out that money is rows. But rows can be typed by anyone...
+so what stops my bank from inventing money?
+
+Double-entry bookkeeping (merchants in Renaissance Italy were using it 500+ years ago):
+every movement of money has TWO sides, a place it comes from and a place it goes.
+
+Each journal entry has two or more postings. Debits are positive, credits are negative,
+and they must sum to exactly zero. Money only ever MOVES, so if anything ever goes
+missing, the books stop balancing and everyone can see it.
+"""
+
+[[steps]]
+kind = "task"
+id = "pay-alex"
+prompt = '''
+My bank has a payments API, just like real ones. Send Alex $12.00.
+
+  POST localhost:8080/api/entries   with JSON:  {"memo": ..., "postings": [...]}
+
+Each posting is {"account": ..., "amount_minor": ...}. You need two of them: one for
+customer:you and one for customer:alex. Remember: from the bank's view your balance is
+money it OWES you. Which side goes down, which goes up, and what are the signs?
+'''
+hint = "Paying Alex means the bank owes you 1200 less (debit, +) and owes Alex 1200 more (credit, −)."
+worked_example = '''
+curl -s -X POST localhost:8080/api/entries -H 'Content-Type: application/json' \
+  -d '{"memo": "Pay Alex", "postings": [
+        {"account": "customer:you",  "amount_minor": 1200},
+        {"account": "customer:alex", "amount_minor": -1200}]}'
+
++1200 on customer:you shrinks a liability; -1200 on customer:alex grows one. Sum: 0.
+'''
+success = "Sent! Your balance went down by $12, Alex's went up by $12, and not a cent was created."
+check = { type = "entry_exists", postings = [
+    { account = "customer:you", amount_minor = 1200 },
+    { account = "customer:alex", amount_minor = -1200 },
+] }
+
+[[steps]]
+kind = "task"
+id = "try-to-cheat"
+prompt = '''
+Now be a villain. Use the same API to give yourself $1,000,000 out of thin air: post
+an entry whose postings DON'T sum to zero (or that has only one posting).
+What does my bank say?
+'''
+hint = '''Try: curl -s -X POST localhost:8080/api/entries -H 'Content-Type: application/json' -d '{"memo": "Free money", "postings": [{"account": "customer:you", "amount_minor": -100000000}]}' '''
+success = "Rejected with HTTP 422. The application refuses to write money that doesn't balance."
+check = { type = "output_matches", pattern = 'sum to zero|at least two postings', command = '^curl\b' }
+
+[[steps]]
+kind = "explain"
+text = """
+That was the application code saying no. But what if someone skips the app and writes
+to the database directly? A careless script, a bad migration, an insider...
+
+Real ledgers defend in depth: the database ITSELF enforces the rule. My ledger has a
+trigger that refuses to mark an entry as posted unless its postings sum to zero.
+Let's prove it, on a copy, so my real books stay safe.
+"""
+
+[[steps]]
+kind = "task"
+id = "copy-ledger"
+scaffold = true
+prompt = "Make a scratch copy of my ledger to experiment on:  cp $BRAMBLE_DATA_DIR/ledger.db ~/lab/scratch.db"
+hint = "Run exactly: cp $BRAMBLE_DATA_DIR/ledger.db ~/lab/scratch.db"
+check = { type = "command_ran", pattern = '^cp\b.*ledger\.db' }
+
+[[steps]]
+kind = "task"
+id = "forge-with-sql"
+expect = "failure"
+prompt = '''
+On ~/lab/scratch.db, use raw SQL to sneak in an entry: insert a journal_entries row,
+give it ONE posting crediting customer:you with -100000000, then try to set its status
+to 'posted'. Watch the database refuse.
+
+(No scratch copy yet? Make one first: cp $BRAMBLE_DATA_DIR/ledger.db ~/lab/scratch.db)
+'''
+hint = "Three statements in one sqlite3 call: INSERT INTO journal_entries ..., INSERT INTO postings ..., UPDATE journal_entries SET status = 'posted' ..."
+worked_example = '''
+sqlite3 ~/lab/scratch.db "INSERT INTO journal_entries (id, memo) VALUES (999, 'Free money');
+  INSERT INTO postings (entry_id, account_id, amount_minor) VALUES (999, 'customer:you', -100000000);
+  UPDATE journal_entries SET status = 'posted' WHERE id = 999;"
+'''
+success = "The trigger aborted it: 'unbalanced entry'. Even direct SQL can't break the rule."
+check = { type = "output_matches", pattern = 'unbalanced entry', command = '^sqlite3\b.*scratch' }
+
+[[steps]]
+kind = "task"
+id = "books-balance"
+prompt = '''
+The superpower of double-entry: add up EVERY posting in my real ledger
+($BRAMBLE_DATA_DIR/ledger.db, read-only), across all accounts. What do you get?
+'''
+hint = '''sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings;"'''
+success = "Zero. Every cent in my bank is accounted for. That's the trial balance."
+check = { type = "output_matches", pattern = '(?m)^\s*0\s*$', command = '^sqlite3\b' }
+
+[[steps]]
+kind = "task"
+id = "nonzero-meaning"
+prompt = """
+Quiz: if that SUM ever came back as something other than 0, what would it mean?
+
+  a) The bank made a profit that day.
+  b) Something is broken (a bug or fraud): money appeared or vanished.
+  c) Normal rounding error.
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Profit is just money moving into revenue accounts. Does moving money change the total?"
+success = "Right. In a correct ledger the total is always zero. Anything else is an alarm bell."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • Every entry has ≥2 postings that sum to zero, so money moves and is never created.
+  • Good systems enforce it twice: in the app (HTTP 422) and in the database (a trigger).
+  • SUM over all postings = 0 is a one-line health check for an entire bank.
+
+Next: what happens when the network hiccups and a payment gets sent twice?
+"""
+
+[[review]]
+id = "valid-entry"
+prompt = """
+An entry has postings of +500 to reserves and -300 to customer:you. My bank will...
+
+  a) accept it
+  b) reject it: the postings don't sum to zero
+  c) accept it and round the difference
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }
+
+[[review]]
+id = "trial-balance"
+prompt = "Run the one-line health check on my real ledger again: SUM of every posting."
+hint = '''sqlite3 -readonly $BRAMBLE_DATA_DIR/ledger.db "SELECT SUM(amount_minor) FROM postings;"'''
+check = { type = "output_matches", pattern = '(?m)^\s*0\s*$', command = '^sqlite3\b' }
