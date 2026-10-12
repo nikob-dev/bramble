@@ -34,7 +34,7 @@ one container = `bramble node` (runs as user `pet`)
 |---|---|
 | `bramble-core` | Pure logic: pet state, concept DAG, mastery, protocol types (versioned) |
 | `bramble-ledger` | Double-entry ledger, idempotency, Rail trait, RTP, ACH |
-| `bramble-net` (M4) | Envelope sign/verify (ed25519), replay window, HTTP peer client; libp2p gossip in M5 |
+| `bramble-net` (M4) | Envelope sign/verify (ed25519), replay window, version checks; no IO (the node owns HTTP). libp2p gossip in M5 |
 | `bramble-mind` (M5) | Feeds, Claude client, extract/verify/review, token budget |
 | `bramble` | Binary: `node`, `tui`, `ledger`, lesson controls |
 | `bramble-web` (M3) | Leptos CSR via trunk |

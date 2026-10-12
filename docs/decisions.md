@@ -69,3 +69,12 @@
 
 ## 016 — The Rails track: 4 lessons and a cutaway (2026-10-11)
 **Decision:** Four lessons: instant payments (RTP), batch payments (ACH), netting & settlement, and cross-bank reconciliation. A cutaway compares RTP and ACH on speed, cost, finality, failure modes and float. Every lesson cites primary sources (Nacha, the Federal Reserve, The Clearing House).
+
+## 017 — `make play` starts the whole network (2026-10-12)
+**Context:** Decision 015 kept `make play` attached to pet-a. The Rails lessons send payments to fern and moss and reconcile against the operator, so those containers must be running.
+**Decision:** `make play`, `make start` and `make up` start all four nodes. The TUI still attaches only to pet-a. The e2e projects give every node its own host port so they never collide with a running network.
+**Trade-off:** Four small containers instead of one while you play the Ledgers track, which doesn't need the others.
+
+## 018 — The operator speaks the banks' WebSocket protocol (2026-10-12)
+**Decision:** The operator serves `/ws` and the same web app. It sends `ServerMsg::Operator` (every bank's balance, settled windows, recent settlements) where banks send `ServerMsg::State`, and the page switches views on the message type. State messages gained an optional `network` field (reserves, ACH queue).
+**Why:** One protocol, one front end; additions stay backward compatible (older clients skip unknown types and fields).

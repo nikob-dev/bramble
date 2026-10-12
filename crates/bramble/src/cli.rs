@@ -178,6 +178,14 @@ pub fn reconcile(config: &Config) -> anyhow::Result<()> {
     std::process::exit(1);
 }
 
+fn plural(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
 fn cutoff(config: &Config) -> anyhow::Result<()> {
     let url = format!("{}/api/ach/cutoff", config.operator_url);
     let response = tokio::runtime::Runtime::new()?.block_on(async {
@@ -202,11 +210,12 @@ fn cutoff(config: &Config) -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    let movements = report.positions.iter().filter(|p| p.net_minor != 0).count();
     println!(
-        "Window {} settled: {} payments became {} net movements.\n",
+        "Window {} settled: {} became {}.\n",
         report.window,
-        report.payments,
-        report.positions.iter().filter(|p| p.net_minor != 0).count()
+        plural(report.payments, "payment"),
+        plural(movements, "net movement")
     );
     println!(
         "{:<8} {:>12} {:>12} {:>12}",
