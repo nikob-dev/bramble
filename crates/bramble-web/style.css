@@ -111,6 +111,12 @@ code { font: 13px var(--mono); }
 .fill.energy { background: var(--energy); }
 .fill.curiosity { background: var(--curiosity); }
 .meter-value { font: 12px var(--mono); color: var(--muted); width: 2.5em; text-align: right; }
+.small { font-size: 13px; }
+.cutaway { margin-top: 12px; font-size: 13px; }
+.cutaway summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.cutaway table { margin-top: 8px; }
+.cutaway tbody th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+.network .stats dd { justify-content: flex-end; }
 .speech { margin: 12px 0 0; font-style: italic; min-height: 1.5em; }
 
 .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
@@ -128,7 +134,7 @@ code { font: 13px var(--mono); }
 .sources a { color: var(--accent); }
 
 .dag { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 4px; }
-.dag-column { display: flex; flex-direction: column; gap: 8px; min-width: 140px; }
+.dag-column { display: flex; flex-direction: column; gap: 8px; flex: 1 1 0; min-width: 96px; }
 .chip {
   display: flex;
   flex-direction: column;

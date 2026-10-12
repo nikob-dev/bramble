@@ -1,0 +1,166 @@
+id = "interbank-reconciliation"
+title = "Cross-bank reconciliation"
+concept = "interbank-reconciliation"
+
+[[sources]]
+title = "Federal Reserve Financial Services: Accounting Services (statements and balance information)"
+url = "https://www.frbservices.org/financial-services/accounting"
+
+[[sources]]
+title = "The Clearing House: The RTP network"
+url = "https://www.theclearinghouse.org/payment-systems/rtp"
+
+# The break: an incoming RTP payment booked by us that the operator never settled.
+[[setup.entries]]
+key = "phantom-rtp"
+memo = "RTP from pet-b/customer:sam: Concert tickets"
+debit = "reserves:operator"
+credit = "customer:you"
+amount_minor = 2500
+
+[[steps]]
+kind = "explain"
+text = """
+Something's off, and I need your help.
+
+My reserves:operator account says how much I hold at the operator. The operator's
+statement says the same thing from its side. Those two numbers are the SAME money,
+kept by two parties, so they must match to the cent. Real banks check this every day
+against the statement their central bank sends them.
+"""
+
+[[steps]]
+kind = "task"
+id = "see-break"
+expect = "failure"
+prompt = """
+Reconcile me against the operator:
+
+  bramble reconcile
+
+(It exits with an error when the two sides disagree. That's the point.)
+"""
+hint = "Run: bramble reconcile"
+success = "A break: my books say I hold $25.00 more than the operator does."
+check = { type = "command_ran", pattern = '^bramble\s+reconcile\b' }
+
+[[steps]]
+kind = "task"
+id = "find-phantom"
+prompt = """
+Find the entry behind the break. Compare my side:
+
+  bramble ledger postings reserves:operator
+
+with the operator's side (its movements on my account):
+
+  curl -s operator:8080/api/statements/pet-a
+
+One of my entries has no matching movement at the operator. Tell me its entry id:
+
+  bramble answer <entry id>
+"""
+hint = "Look for a $25.00 (2500) posting in my books that never appears in the operator's movements."
+worked_example = '''
+bramble ledger postings reserves:operator
+
+ENTRY  ACCOUNT                    AMOUNT_MINOR  MEMO
+   42  reserves:operator                  2500  RTP from pet-b/customer:sam: Concert tickets
+   ...
+
+The operator's statement has no +2500 from pet-b: that payment was never settled.
+Answer with its entry id, e.g.  bramble answer 42
+'''
+success = "Found it: I booked an incoming RTP that the operator never settled. Money I don't actually have."
+check = { type = "answer_entry", setup_key = "interbank-reconciliation:phantom-rtp" }
+
+[[steps]]
+kind = "task"
+id = "reverse-it"
+prompt = '''
+Fix it the way ledgers fix things: never edit, post a REVERSING entry. Through my
+payments API, take the $25.00 back out of reserves:operator and back from customer:you.
+
+  POST localhost:8080/api/entries   (with an Idempotency-Key header)
+'''
+hint = "Two postings: reserves:operator −2500 and customer:you +2500. Memo: say what you're reversing and why."
+worked_example = '''
+curl -s -X POST localhost:8080/api/entries \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: reverse-phantom-rtp' \
+  -d '{"memo": "Reversal: RTP from pet-b never settled at the operator",
+       "postings": [{"account": "reserves:operator", "amount_minor": -2500},
+                    {"account": "customer:you", "amount_minor": 2500}]}'
+'''
+success = "Reversed, with a memo that explains why. The mistake and its fix both stay in the history."
+check = { type = "entry_exists", postings = [
+    { account = "reserves:operator", amount_minor = -2500 },
+    { account = "customer:you", amount_minor = 2500 },
+] }
+
+[[steps]]
+kind = "task"
+id = "reconciled"
+prompt = """
+Prove it:
+
+  bramble reconcile
+"""
+hint = "Run: bramble reconcile"
+success = "Reconciled: my books and the operator's agree again."
+check = { type = "command_ran", pattern = '^bramble\s+reconcile\b' }
+
+[[steps]]
+kind = "task"
+id = "whose-number"
+prompt = """
+Quiz: my books and the operator's disagree about my reserves. Whose number is the money?
+
+  a) Mine: it's my bank
+  b) The operator's: the reserves live on its books, so I correct mine
+  c) Whichever is bigger
+
+Answer with:  bramble answer <letter>
+"""
+hint = "Where does the money actually sit?"
+success = "Right. My reserves:operator is my RECORD of money held elsewhere. The holder's books win."
+check = { type = "quiz_answer", answer = "b" }
+
+[[steps]]
+kind = "explain"
+text = """
+What we learned:
+  • My reserves at the operator are recorded twice: as my asset and as the operator's
+    liability. Reconciling them proves the network agrees.
+  • A break means one side booked something the other didn't. Here, a payment I thought
+    arrived never settled.
+  • Breaks are fixed with a reversing entry and a clear memo, then re-reconciled.
+
+That's the whole Rails track: instant payments, batches, netting, and keeping three banks'
+books honest with each other.
+"""
+
+[[review]]
+id = "break-direction"
+prompt = """
+bramble reconcile says: our books $10,010.00, operator's statement $10,000.00. Most likely...
+
+  a) We booked $10.00 coming in that the operator never settled
+  b) The operator stole $10.00
+  c) Rounding
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "a" }
+
+[[review]]
+id = "fix-a-break"
+prompt = """
+You found an entry in your books that the operator never settled. The fix is...
+
+  a) delete the entry
+  b) post a reversing entry with a memo explaining why
+  c) ask the operator to add a matching movement
+
+Answer with:  bramble answer <letter>
+"""
+check = { type = "quiz_answer", answer = "b" }

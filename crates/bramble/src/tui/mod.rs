@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use bramble_core::PROTOCOL_VERSION;
 use bramble_core::protocol::{
-    ActivityView, ClientMsg, ConceptView, LessonView, PetView, ServerMsg,
+    ActivityView, ClientMsg, ConceptView, LessonView, NetworkView, PetView, ServerMsg,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -39,6 +39,7 @@ struct App {
     lesson: Option<LessonView>,
     mastery: Vec<ConceptView>,
     activity: Option<ActivityView>,
+    network: Option<NetworkView>,
     say: Option<String>,
     node_status: Option<String>,
     frame: u64,
@@ -55,6 +56,7 @@ impl App {
             lesson: None,
             mastery: Vec::new(),
             activity: None,
+            network: None,
             say: None,
             node_status: Some("connecting…".into()),
             frame: 0,
@@ -82,6 +84,7 @@ impl App {
                         lesson: app.lesson.as_ref(),
                         mastery: &app.mastery,
                         activity: app.activity.as_ref(),
+                        network: app.network.as_ref(),
                         say: app.say.as_deref(),
                         node_status: app.node_status.as_deref(),
                         frame: app.frame,
@@ -127,11 +130,16 @@ impl App {
                         app.node_status = Some(format!("offline ({reason})"));
                     }
                     NodeEvent::Message(msg) => {
-                        let ServerMsg::State { pet, lesson, say, mastery, activity, .. } = *msg;
+                        // The lab only attaches to banks; anything else isn't for us.
+                        let ServerMsg::State { pet, lesson, say, mastery, activity, network, .. } = *msg
+                        else {
+                            continue;
+                        };
                         app.pet = Some(pet);
                         app.lesson = lesson;
                         app.mastery = mastery;
                         app.activity = activity;
+                        app.network = network;
                         if say.is_some() {
                             app.say = say;
                         }

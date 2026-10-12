@@ -10,6 +10,28 @@ pub struct Config {
     pub node_url: String,
     pub lab_dir: PathBuf,
     pub web_dir: PathBuf,
+    /// This node's id on the network; peers address it by this name.
+    pub node_id: String,
+    /// Listener for node-to-node envelopes. Never published to the host.
+    pub net_bind: String,
+    /// Peer addresses (`host:port`), e.g. `pet-b:9090,pet-c:9090`.
+    pub peers: Vec<String>,
+    pub role: Role,
+    /// The node id of the operator that settles between banks (decision 012).
+    pub operator_id: String,
+    /// Operator only: the banks it holds reserves for.
+    pub banks: Vec<String>,
+    /// Operator only: close an ACH window this often. Off unless set (decision 013).
+    pub ach_cutoff_secs: Option<u64>,
+    /// Where `bramble ach cutoff` reaches the operator.
+    pub operator_url: String,
+}
+
+/// A node is either a pet-bank or the operator that settles between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Bank,
+    Operator,
 }
 
 impl Config {
@@ -25,6 +47,22 @@ impl Config {
             node_url: var("BRAMBLE_NODE_URL", "ws://127.0.0.1:8080/ws"),
             lab_dir: var("BRAMBLE_LAB_DIR", &format!("{home}/lab")).into(),
             web_dir: var("BRAMBLE_WEB_DIR", "./crates/bramble-web/dist").into(),
+            node_id: var("BRAMBLE_NODE_ID", "pet-a"),
+            net_bind: var("BRAMBLE_NET_BIND", "0.0.0.0:9090"),
+            peers: parse_list(&var("BRAMBLE_PEERS", "")),
+            role: match var("BRAMBLE_ROLE", "bank").as_str() {
+                "bank" => Role::Bank,
+                "operator" => Role::Operator,
+                other => panic!("BRAMBLE_ROLE must be \"bank\" or \"operator\", got {other:?}"),
+            },
+            operator_id: var("BRAMBLE_OPERATOR_ID", "operator"),
+            banks: parse_list(&var("BRAMBLE_BANKS", "")),
+            ach_cutoff_secs: std::env::var("BRAMBLE_ACH_CUTOFF_SECS").ok().map(|secs| {
+                secs.parse().unwrap_or_else(|_| {
+                    panic!("BRAMBLE_ACH_CUTOFF_SECS must be seconds, got {secs:?}")
+                })
+            }),
+            operator_url: var("BRAMBLE_OPERATOR_URL", "http://operator:8080"),
         }
     }
 
@@ -34,5 +72,27 @@ impl Config {
 
     pub fn pet_store_path(&self) -> PathBuf {
         self.data_dir.join("pet.db")
+    }
+}
+
+fn parse_list(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|peer| !peer.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_parse_list_ignores_blanks_and_spaces() {
+        assert_eq!(
+            parse_list(" pet-b:9090, ,pet-c:9090,"),
+            ["pet-b:9090", "pet-c:9090"]
+        );
+        assert!(parse_list("").is_empty());
     }
 }

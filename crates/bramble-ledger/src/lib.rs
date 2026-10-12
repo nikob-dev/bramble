@@ -6,10 +6,13 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 pub use bramble_core::money::format_minor;
+
+pub mod nacha;
+pub mod rails;
 
 const SCHEMA: &str = include_str!("schema.sql");
 
@@ -128,6 +131,40 @@ pub struct EntryRow {
     pub postings: Vec<Posting>,
 }
 
+impl From<EntryRow> for bramble_core::protocol::EntryView {
+    fn from(row: EntryRow) -> Self {
+        Self {
+            entry_id: row.entry_id,
+            memo: row.memo,
+            postings: row
+                .postings
+                .into_iter()
+                .map(|p| bramble_core::lesson::PostingSpec {
+                    account: p.account,
+                    amount_minor: p.amount_minor,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What an ACH origination queues for the next file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboxItem {
+    pub originator: String,
+    pub receiving_bank: String,
+    pub receiving_account: String,
+    pub receiver_name: String,
+    pub amount_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboxRow {
+    pub trace_seq: i64,
+    pub entry_id: EntryId,
+    pub item: OutboxItem,
+}
+
 pub struct Ledger {
     conn: Connection,
 }
@@ -169,56 +206,74 @@ impl Ledger {
     }
 
     pub fn post(&mut self, entry: &NewEntry) -> Result<PostOutcome> {
-        validate(entry)?;
-        let fingerprint = fingerprint(entry);
-
         let tx = self.conn.transaction()?;
-
-        if let Some(key) = &entry.idempotency_key {
-            let existing: Option<(EntryId, Option<String>)> = tx
-                .query_row(
-                    "SELECT id, request_fingerprint FROM journal_entries WHERE idempotency_key = ?1",
-                    [key],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?;
-            if let Some((id, stored)) = existing {
-                return if stored.as_deref() == Some(fingerprint.as_str()) {
-                    Ok(PostOutcome::Replayed(id))
-                } else {
-                    Err(LedgerError::IdempotencyConflict(key.clone()))
-                };
-            }
-        }
-
-        for posting in &entry.postings {
-            let exists: bool = tx.query_row(
-                "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = ?1)",
-                [&posting.account],
-                |row| row.get(0),
-            )?;
-            if !exists {
-                return Err(LedgerError::UnknownAccount(posting.account.clone()));
-            }
-        }
-
-        tx.execute(
-            "INSERT INTO journal_entries (memo, idempotency_key, request_fingerprint) VALUES (?1, ?2, ?3)",
-            params![entry.memo, entry.idempotency_key, fingerprint],
-        )?;
-        let entry_id = tx.last_insert_rowid();
-        for posting in &entry.postings {
-            tx.execute(
-                "INSERT INTO postings (entry_id, account_id, amount_minor) VALUES (?1, ?2, ?3)",
-                params![entry_id, posting.account, posting.amount_minor],
-            )?;
-        }
-        tx.execute(
-            "UPDATE journal_entries SET status = 'posted' WHERE id = ?1",
-            [entry_id],
-        )?;
+        let outcome = post_in(&tx, entry)?;
         tx.commit()?;
-        Ok(PostOutcome::Created(entry_id))
+        Ok(outcome)
+    }
+
+    /// Books an ACH payment and queues it for the next file, atomically (see
+    /// `ach_outbox` in schema.sql). A replayed idempotency key queues nothing new.
+    pub fn originate_ach(&mut self, entry: &NewEntry, item: &OutboxItem) -> Result<PostOutcome> {
+        let tx = self.conn.transaction()?;
+        let outcome = post_in(&tx, entry)?;
+        if let PostOutcome::Created(entry_id) = outcome {
+            tx.execute(
+                "INSERT INTO ach_outbox
+                     (entry_id, originator, receiving_bank, receiving_account, receiver_name, amount_minor)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    entry_id,
+                    item.originator,
+                    item.receiving_bank,
+                    item.receiving_account,
+                    item.receiver_name,
+                    item.amount_minor
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    /// ACH payments waiting for the next cutoff, oldest first.
+    pub fn pending_ach(&self) -> Result<Vec<OutboxRow>> {
+        outbox_rows(&self.conn, "file_id IS NULL", [])
+    }
+
+    /// The ACH payments that went out in one file.
+    pub fn ach_file_rows(&self, file_id: &str) -> Result<Vec<OutboxRow>> {
+        outbox_rows(&self.conn, "file_id = ?1", [file_id])
+    }
+
+    /// Puts every pending ACH payment into file `file_id` and returns that file's rows.
+    /// Idempotent: if the file was already assembled (a retried cutoff), it returns the
+    /// same rows and claims no new ones.
+    pub fn submit_ach(&mut self, file_id: &str) -> Result<Vec<OutboxRow>> {
+        let tx = self.conn.transaction()?;
+        let already: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM ach_outbox WHERE file_id = ?1)",
+            [file_id],
+            |row| row.get(0),
+        )?;
+        if !already {
+            tx.execute(
+                "UPDATE ach_outbox SET file_id = ?1 WHERE file_id IS NULL",
+                [file_id],
+            )?;
+        }
+        let rows = outbox_rows(&tx, "file_id = ?1", [file_id])?;
+        tx.commit()?;
+        Ok(rows)
+    }
+
+    /// How many entries carry an idempotency key starting with `prefix`.
+    pub fn count_entries_with_key_prefix(&self, prefix: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM journal_entries WHERE substr(idempotency_key, 1, length(?1)) = ?1",
+            [prefix],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn balance(&self, account: &str) -> Result<i64> {
@@ -390,6 +445,84 @@ impl Ledger {
             |row| row.get(0),
         )?)
     }
+}
+
+fn outbox_rows<P: rusqlite::Params>(
+    conn: &Connection,
+    filter: &str,
+    params: P,
+) -> Result<Vec<OutboxRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, entry_id, originator, receiving_bank, receiving_account, receiver_name, amount_minor
+         FROM ach_outbox
+         WHERE {filter}
+         ORDER BY id"
+    ))?;
+    let rows = stmt.query_map(params, |row| {
+        Ok(OutboxRow {
+            trace_seq: row.get(0)?,
+            entry_id: row.get(1)?,
+            item: OutboxItem {
+                originator: row.get(2)?,
+                receiving_bank: row.get(3)?,
+                receiving_account: row.get(4)?,
+                receiver_name: row.get(5)?,
+                amount_minor: row.get(6)?,
+            },
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Posts `entry` inside the caller's transaction; the caller commits.
+fn post_in(tx: &Transaction<'_>, entry: &NewEntry) -> Result<PostOutcome> {
+    validate(entry)?;
+    let fingerprint = fingerprint(entry);
+
+    if let Some(key) = &entry.idempotency_key {
+        let existing: Option<(EntryId, Option<String>)> = tx
+            .query_row(
+                "SELECT id, request_fingerprint FROM journal_entries WHERE idempotency_key = ?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((id, stored)) = existing {
+            return if stored.as_deref() == Some(fingerprint.as_str()) {
+                Ok(PostOutcome::Replayed(id))
+            } else {
+                Err(LedgerError::IdempotencyConflict(key.clone()))
+            };
+        }
+    }
+
+    for posting in &entry.postings {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = ?1)",
+            [&posting.account],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(LedgerError::UnknownAccount(posting.account.clone()));
+        }
+    }
+
+    tx.execute(
+        "INSERT INTO journal_entries (memo, idempotency_key, request_fingerprint) VALUES (?1, ?2, ?3)",
+        params![entry.memo, entry.idempotency_key, fingerprint],
+    )?;
+    let entry_id = tx.last_insert_rowid();
+    for posting in &entry.postings {
+        tx.execute(
+            "INSERT INTO postings (entry_id, account_id, amount_minor) VALUES (?1, ?2, ?3)",
+            params![entry_id, posting.account, posting.amount_minor],
+        )?;
+    }
+    tx.execute(
+        "UPDATE journal_entries SET status = 'posted' WHERE id = ?1",
+        [entry_id],
+    )?;
+    Ok(PostOutcome::Created(entry_id))
 }
 
 fn validate(entry: &NewEntry) -> Result<()> {

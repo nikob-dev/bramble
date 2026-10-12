@@ -1,6 +1,7 @@
+use bramble_core::money::format_minor;
 use bramble_core::pet::Mood;
 use bramble_core::protocol::{
-    ActivityView, ConceptStatus, ConceptView, LessonView, PetView, StepKind,
+    ActivityView, ConceptStatus, ConceptView, LessonView, NetworkView, PetView, StepKind,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -21,6 +22,7 @@ pub struct View<'a> {
     pub lesson: Option<&'a LessonView>,
     pub mastery: &'a [ConceptView],
     pub activity: Option<&'a ActivityView>,
+    pub network: Option<&'a NetworkView>,
     pub say: Option<&'a str>,
     pub node_status: Option<&'a str>,
     pub frame: u64,
@@ -122,6 +124,24 @@ fn draw_pet(frame: &mut Frame, area: Rect, view: &View) {
         ]),
         Line::raw(""),
     ];
+    if let Some(network) = view.network {
+        lines.push(Line::from(vec![
+            Span::raw(format!(" {} ", network.node_id)).bold(),
+            Span::raw("at the operator ").dim(),
+            Span::raw(format_minor(network.reserves_minor)),
+        ]));
+        if network.ach_queued > 0 {
+            lines.push(
+                Line::from(format!(
+                    " ACH queued: {} · {} (settles at cutoff)",
+                    network.ach_queued,
+                    format_minor(network.ach_queued_minor)
+                ))
+                .fg(Color::Yellow),
+            );
+        }
+        lines.push(Line::raw(""));
+    }
     if let Some(say) = view.say {
         lines.push(Line::from(format!("“{say}”").italic()));
     }

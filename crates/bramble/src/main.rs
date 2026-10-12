@@ -1,3 +1,4 @@
+mod ach;
 mod cli;
 mod config;
 mod node;
@@ -29,6 +30,13 @@ enum Command {
         #[command(subcommand)]
         command: cli::LedgerCommand,
     },
+    /// Inspect this bank's ACH payments (read-only).
+    Ach {
+        #[command(subcommand)]
+        command: cli::AchCommand,
+    },
+    /// Check our reserves against the operator's statement of our account.
+    Reconcile,
     /// Continue past an explanation in the current lesson.
     Next,
     /// Ask your pet for a hint on the current task.
@@ -45,6 +53,8 @@ fn main() -> anyhow::Result<()> {
         Command::Node => node::run(config),
         Command::Tui => tui::run(config),
         Command::Ledger { command } => cli::ledger(&config, command),
+        Command::Ach { command } => cli::ach(&config, command),
+        Command::Reconcile => cli::reconcile(&config),
         Command::Next => cli::acknowledge("Continuing…"),
         Command::Hint => cli::acknowledge("Asking your pet for a hint…"),
         Command::Answer { choice } => cli::acknowledge(&format!("You answered: {choice}")),

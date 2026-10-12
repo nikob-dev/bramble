@@ -24,9 +24,14 @@ command_not_found_handle() {
     return 127
 }
 __bramble_hook() {
-    local ec=$? num cmd
-    read -r num cmd <<< "$(HISTTIMEFORMAT= builtin history 1)"
-    if [[ -n "$num" && "$num" != "$__bramble_last" ]]; then
+    local ec=$? entry num cmd
+    entry=$(HISTTIMEFORMAT= builtin history 1)
+    # A regex rather than `read`: a multi-line command (a loop, quoted JSON) is one
+    # history entry with real newlines in it, and `.` here matches them too.
+    [[ $entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]] || return 0
+    num=${BASH_REMATCH[1]}
+    cmd=${BASH_REMATCH[2]}
+    if [[ "$num" != "$__bramble_last" ]]; then
         __bramble_last=$num
         printf '\e]7770;%s\a' "$(printf '%s\t%s\t%s' "$ec" "$PWD" "$cmd" | base64 -w0)"
     fi

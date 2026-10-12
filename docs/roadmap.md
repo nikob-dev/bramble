@@ -18,8 +18,8 @@ The pet is a **self-learning teacher**. It learns from curated industry feeds th
 
 ## Architecture
 ```
-docker compose: pet-a  pet-b  pet-c   (+ dev toolchain; profile chain → anvil)
-                  └──── libp2p gossipsub + mDNS (BRAMBLE_PEERS fallback) ────┘
+docker compose: pet-a  pet-b  pet-c  operator   (+ dev toolchain; profile chain → anvil)
+                  └── HTTP, static BRAMBLE_PEERS (M4) · libp2p gossipsub (M5) ──┘
                   versioned signed envelopes: {v, kind, from, ts, nonce, payload, sig}
 
 one container = `bramble node` (runs as user `pet`)
@@ -34,7 +34,7 @@ one container = `bramble node` (runs as user `pet`)
 |---|---|
 | `bramble-core` | Pure logic: pet state, concept DAG, mastery, protocol types (versioned) |
 | `bramble-ledger` | Double-entry ledger, idempotency, Rail trait, RTP, ACH |
-| `bramble-net` (M4) | libp2p, ed25519 identity, envelope sign/verify, replay window |
+| `bramble-net` (M4) | Envelope sign/verify (ed25519), replay window, version checks; no IO (the node owns HTTP). libp2p gossip in M5 |
 | `bramble-mind` (M5) | Feeds, Claude client, extract/verify/review, token budget |
 | `bramble` | Binary: `node`, `tui`, `ledger`, lesson controls |
 | `bramble-web` (M3) | Leptos CSR via trunk |
@@ -67,7 +67,7 @@ one container = `bramble node` (runs as user `pet`)
 | Risk | Mitigation |
 |---|---|
 | Scope creep | M1 is a shippable walking skeleton; every later milestone is optional |
-| mDNS is flaky on Docker bridges | Static `BRAMBLE_PEERS` fallback from day one |
+| mDNS is flaky on Docker bridges | M4 uses a static `BRAMBLE_PEERS` list (decision 011); revisit discovery with libp2p in M5 |
 | Feeds lack RSS or change format | Verify the list at M5; fall back to a curated seed list |
 | LLM factual errors enter the curriculum | Verbatim-quote check, diverse reviewers, human veto, citations |
 | Wrong payment facts in seeded content | Every lesson cites a primary source (Fed, Nacha, ISO, EMVCo, PCI SSC) |

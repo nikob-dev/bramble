@@ -11,6 +11,8 @@ use bramble_ledger::{Ledger, LedgerError, NewEntry, PostOutcome, Posting};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::ach_bank::{Refusal, originate};
+use super::rtp::{PaymentRequest, SendOutcome, send_payment};
 use super::{Shared, now_unix};
 
 pub const IDEMPOTENCY_HEADER: &str = "idempotency-key";
@@ -39,6 +41,106 @@ pub async fn post_entry(
         let _ = shared.updates.send(world.snapshot(None, now_unix()));
     }
     (status, Json(body))
+}
+
+/// `POST /api/rtp/payments`: an instant payment to a customer at another bank.
+/// 201 settled, 200 replay (same `Idempotency-Key`), 422 refused, 504 no answer in time.
+pub async fn post_rtp_payment(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(request): Json<PaymentRequest>,
+) -> (StatusCode, Json<Value>) {
+    let key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let outcome = send_payment(&shared, request, key).await;
+    let (status, body) = match outcome {
+        SendOutcome::Settled { msg_id, entry_id } => (
+            StatusCode::CREATED,
+            json!({ "status": "settled", "msg_id": msg_id, "entry_id": entry_id }),
+        ),
+        SendOutcome::Replayed { msg_id, entry_id } => (
+            StatusCode::OK,
+            json!({ "status": "settled", "msg_id": msg_id, "entry_id": entry_id, "replayed": true }),
+        ),
+        SendOutcome::Invalid(error) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "refused", "error": error }),
+        ),
+        SendOutcome::Rejected { msg_id, reason } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "rejected", "msg_id": msg_id, "error": reason }),
+        ),
+        SendOutcome::TimedOut { msg_id } => (
+            StatusCode::GATEWAY_TIMEOUT,
+            json!({
+                "status": "unknown",
+                "msg_id": msg_id,
+                "error": "no answer in time; retry with the same Idempotency-Key to find out"
+            }),
+        ),
+    };
+    tracing::info!(status = status.as_u16(), body = %body, "api rtp payment");
+    (status, Json(body))
+}
+
+/// `POST /api/ach/payments`: queue a payment for the next ACH file. The customer is
+/// debited now (into `clearing:ach-out`); money moves between banks at cutoff.
+/// 201 queued, 200 replay (same `Idempotency-Key`), 409 key reused, 422 refused.
+pub async fn post_ach_payment(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(request): Json<PaymentRequest>,
+) -> (StatusCode, Json<Value>) {
+    let key = headers
+        .get(IDEMPOTENCY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let (status, body) = match originate(&shared, request, key).await {
+        Ok(PostOutcome::Created(entry_id)) => (
+            StatusCode::CREATED,
+            json!({ "status": "queued", "entry_id": entry_id }),
+        ),
+        Ok(PostOutcome::Replayed(entry_id)) => (
+            StatusCode::OK,
+            json!({ "status": "queued", "entry_id": entry_id, "replayed": true }),
+        ),
+        Err(Refusal::Conflict(error)) => (StatusCode::CONFLICT, json!({ "error": error })),
+        Err(Refusal::Invalid(error)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "status": "refused", "error": error }),
+        ),
+    };
+    tracing::info!(status = status.as_u16(), body = %body, "api ach payment");
+    (status, Json(body))
+}
+
+/// `GET /api/ach/pending`: the Nacha file the next cutoff would send (204 if empty).
+pub async fn ach_pending(State(shared): State<Arc<Shared>>) -> Response {
+    let world = shared.world.lock().await;
+    let rows = match world.ledger.pending_ach() {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, "reading the ACH outbox");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if rows.is_empty() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let file = crate::ach::pending_file(&shared.net.id, &shared.operator_id, &rows, now_unix());
+    match file.to_nacha() {
+        Ok(text) => (
+            [(header::CONTENT_TYPE, "text/plain; charset=us-ascii")],
+            text,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "writing the pending ACH file");
+            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response()
+        }
+    }
 }
 
 pub fn submit_entry(

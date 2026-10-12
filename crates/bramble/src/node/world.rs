@@ -5,7 +5,8 @@ use bramble_core::lesson::{Lesson, PostingSpec, setup_entry_key};
 use bramble_core::mastery::MasteryMap;
 use bramble_core::pet::{Pet, PetEvent};
 use bramble_core::protocol::{
-    AccountView, ActivityView, ConceptView, EntryView, LedgerView, LessonView, PetView, ServerMsg,
+    AccountView, ActivityView, ConceptView, EntryView, LedgerView, LessonView, NetworkView,
+    PetView, ServerMsg,
 };
 use bramble_core::session::{self, Facts, LessonProgress, Observation, Outcome};
 use bramble_core::teacher::{self, ActivityKind, ActivityPlan, ActivitySummary};
@@ -35,6 +36,7 @@ pub struct World {
     pub ledger: Ledger,
     pub published: Published,
     store: PetStore,
+    node_id: String,
 }
 
 struct NodeFacts<'a> {
@@ -84,6 +86,8 @@ impl Facts for NodeFacts<'_> {
 
 pub struct WorldParts {
     pub pet_name: String,
+    /// This bank's id on the network (shown on its dashboard).
+    pub node_id: String,
     pub curriculum: Curriculum,
     pub lessons: Vec<Lesson>,
     pub ledger: Ledger,
@@ -95,6 +99,7 @@ impl World {
     pub fn load(parts: WorldParts, now_unix: i64) -> anyhow::Result<Self> {
         let WorldParts {
             pet_name,
+            node_id,
             curriculum,
             lessons,
             ledger,
@@ -126,6 +131,7 @@ impl World {
             ledger,
             published,
             store,
+            node_id,
         };
         let saved = world.store.load::<LessonProgress>(PROGRESS_DOC)?;
         world.start_activity(plan, saved)?;
@@ -182,7 +188,25 @@ impl World {
             mastery: ConceptView::build_all(&self.curriculum, &self.mastery, now_unix),
             activity: Some(ActivityView::from(&self.plan)),
             ledger: self.ledger_view(),
+            network: self.network_view(),
         }
+    }
+
+    fn network_view(&self) -> Option<NetworkView> {
+        let read = || -> bramble_ledger::Result<NetworkView> {
+            let queued = self.ledger.pending_ach()?;
+            Ok(NetworkView {
+                node_id: self.node_id.clone(),
+                reserves_minor: self
+                    .ledger
+                    .balance(bramble_ledger::rails::RESERVES_AT_OPERATOR)?,
+                ach_queued: queued.len(),
+                ach_queued_minor: queued.iter().map(|row| row.item.amount_minor).sum(),
+            })
+        };
+        read()
+            .map_err(|error| tracing::error!(%error, "reading the network view"))
+            .ok()
     }
 
     fn ledger_view(&self) -> Option<LedgerView> {
@@ -202,18 +226,7 @@ impl World {
                     .ledger
                     .recent_entries(RECENT_ENTRIES)?
                     .into_iter()
-                    .map(|e| EntryView {
-                        entry_id: e.entry_id,
-                        memo: e.memo,
-                        postings: e
-                            .postings
-                            .into_iter()
-                            .map(|p| PostingSpec {
-                                account: p.account,
-                                amount_minor: p.amount_minor,
-                            })
-                            .collect(),
-                    })
+                    .map(EntryView::from)
                     .collect(),
             })
         };

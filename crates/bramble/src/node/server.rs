@@ -27,11 +27,20 @@ pub fn router(shared: Arc<Shared>, web_dir: &Path) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/api/state", get(state))
         .route("/api/entries", post(api::post_entry))
+        .route("/api/rtp/payments", post(api::post_rtp_payment))
+        .route("/api/ach/payments", post(api::post_ach_payment))
+        .route("/api/ach/pending", get(api::ach_pending))
         .route("/api/statements/card-network", get(api::statement))
         .route("/api/files/{name}", get(api::file))
         .route("/api/keys/node.pem", get(api::public_key))
         .route("/ws", get(ws))
         .with_state(shared);
+    with_web_app(api, web_dir)
+}
+
+/// Serves the browser app from `web_dir` for any path the API doesn't claim, when it has
+/// been built (`web_dir/index.html`). Shared by banks and the operator.
+pub fn with_web_app(api: Router, web_dir: &Path) -> Router {
     let index = web_dir.join("index.html");
     if index.exists() {
         api.fallback_service(ServeDir::new(web_dir).fallback(ServeFile::new(index)))
@@ -137,17 +146,13 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message as WsMessage;
 
     use super::*;
-    use crate::node::test_support::world;
+    use crate::node::test_support::{shared, world};
 
     /// The M3 definition of done: every client sees a change within a second.
     const SYNC_DEADLINE: Duration = Duration::from_secs(1);
 
     async fn start(web_dir: &Path) -> std::net::SocketAddr {
-        let (updates, _) = broadcast::channel(64);
-        let shared = Arc::new(Shared {
-            world: tokio::sync::Mutex::new(world()),
-            updates,
-        });
+        let shared = shared("pet-a", 1, world());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -180,7 +185,9 @@ mod tests {
     }
 
     fn step_index(msg: &ServerMsg) -> usize {
-        let ServerMsg::State { lesson, .. } = msg;
+        let ServerMsg::State { lesson, .. } = msg else {
+            panic!("a bank sends state messages");
+        };
         lesson.as_ref().expect("lesson").step_index
     }
 
@@ -241,7 +248,9 @@ mod tests {
         .await;
         assert!(response.starts_with("HTTP/1.1 201"), "{response}");
 
-        let ServerMsg::State { ledger, .. } = next_state(&mut browser).await;
+        let ServerMsg::State { ledger, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
         let ledger = ledger.expect("ledger view");
         assert_eq!(ledger.recent_entries[0].memo, "Pay Alex");
         let alex = ledger
@@ -250,6 +259,85 @@ mod tests {
             .find(|a| a.account == "customer:alex")
             .expect("alex");
         assert_eq!(alex.balance_minor, -1200);
+    }
+
+    fn post_json(path: &str, key: &str, body: &str) -> String {
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nIdempotency-Key: {key}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_is_queued_and_shows_in_the_pending_file() {
+        let addr = start(Path::new("/nonexistent")).await;
+        let get_pending = "GET /api/ach/pending HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+        assert!(
+            http(addr, get_pending).await.starts_with("HTTP/1.1 204"),
+            "nothing queued yet"
+        );
+
+        let body = r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":1300,"memo":"Rent share","receiver_name":"Alex Kim"}"#;
+        let first = http(addr, &post_json("/api/ach/payments", "rent-1", body)).await;
+        assert!(first.starts_with("HTTP/1.1 201"), "{first}");
+        let again = http(addr, &post_json("/api/ach/payments", "rent-1", body)).await;
+        assert!(again.starts_with("HTTP/1.1 200"), "replay: {again}");
+
+        let pending = http(addr, get_pending).await;
+        assert!(pending.starts_with("HTTP/1.1 200"), "{pending}");
+        let file = pending.split("\r\n\r\n").nth(1).expect("body");
+        let parsed = bramble_ledger::nacha::parse(file).expect("a valid Nacha file");
+        assert_eq!(parsed.entry_count(), 1, "the retry queued nothing new");
+        let entry = &parsed.batches[0].entries[0];
+        assert_eq!(
+            (entry.account.as_str(), entry.amount_minor),
+            ("alex", 1_300)
+        );
+        assert_eq!(entry.individual_name, "ALEX KIM");
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_updates_every_clients_network_view_within_a_second() {
+        let addr = start(Path::new("/nonexistent")).await;
+        let mut browser = connect(addr).await;
+        let ServerMsg::State { network, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
+        let network = network.expect("network view");
+        assert_eq!((network.node_id.as_str(), network.ach_queued), ("pet-a", 0));
+        assert_eq!(
+            network.reserves_minor,
+            bramble_ledger::rails::OPENING_RESERVES
+        );
+
+        let body = r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":1300}"#;
+        let response = http(addr, &post_json("/api/ach/payments", "sync-1", body)).await;
+        assert!(response.starts_with("HTTP/1.1 201"), "{response}");
+
+        let ServerMsg::State { network, .. } = next_state(&mut browser).await else {
+            panic!("a bank sends state messages");
+        };
+        let network = network.expect("network view");
+        assert_eq!((network.ach_queued, network.ach_queued_minor), (1, 1_300));
+    }
+
+    #[tokio::test]
+    async fn server_ach_payment_refuses_unknown_banks_and_overdrafts() {
+        let addr = start(Path::new("/nonexistent")).await;
+        for (body, why) in [
+            (
+                r#"{"from_account":"customer:you","to_bank":"pet-z","to_account":"customer:alex","amount_minor":100}"#,
+                "not a bank",
+            ),
+            (
+                r#"{"from_account":"customer:you","to_bank":"pet-b","to_account":"customer:alex","amount_minor":99999999}"#,
+                "insufficient funds",
+            ),
+        ] {
+            let response = http(addr, &post_json("/api/ach/payments", why, body)).await;
+            assert!(response.starts_with("HTTP/1.1 422"), "{why}: {response}");
+            assert!(response.contains(why), "{response}");
+        }
     }
 
     #[tokio::test]

@@ -128,6 +128,14 @@ mod tests {
     }
 
     #[test]
+    fn markers_feed_keeps_multi_line_commands_whole() {
+        let cmd = "for amount in 500 700; do\n  curl -d \"{\\\"amount_minor\\\": $amount}\" x/api/ach/payments\ndone";
+        let obs = MarkerScanner::default().feed(&end_marker(0, "/home/learner/lab", cmd));
+        assert_eq!(obs.len(), 1);
+        assert_eq!(obs[0].cmd, cmd, "every line survives");
+    }
+
+    #[test]
     fn markers_feed_extracts_command_and_clean_output() {
         let obs = MarkerScanner::default().feed(&session_bytes());
         assert_eq!(obs.len(), 1);
